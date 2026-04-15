@@ -60,82 +60,48 @@ def _make_api_request(url: str, headers: dict, method: str = "GET", json_data: d
         return response
 
 
-def get_prices(ticker: str, start_date: str, end_date: str, api_key: str = None) -> list[Price]:
-    """Fetch price data from cache or API."""
-    # Create a cache key that includes all parameters to ensure exact matches
-    cache_key = f"{ticker}_{start_date}_{end_date}"
+async def get_prices(ticker: str, start_date: str, end_date: str) -> List[Price]:
+    # 调用 Tushare 的 daily 接口获取日线行情
+    df = pro.daily(ts_code=ticker, start_date=start_date.replace('-', ''), end_date=end_date.replace('-', ''))
     
-    # Check cache first - simple exact match
-    if cached_data := _cache.get_prices(cache_key):
-        return [Price(**price) for price in cached_data]
-
-    # If not in cache, fetch from API
-    headers = {}
-    financial_api_key = api_key or os.environ.get("FINANCIAL_DATASETS_API_KEY")
-    if financial_api_key:
-        headers["X-API-KEY"] = financial_api_key
-
-    url = f"https://api.financialdatasets.ai/prices/?ticker={ticker}&interval=day&interval_multiplier=1&start_date={start_date}&end_date={end_date}"
-    response = _make_api_request(url, headers)
-    if response.status_code != 200:
+    # 如果获取到的数据为空，直接返回空列表
+    if df.empty:
         return []
-
-    # Parse response with Pydantic model
-    try:
-        price_response = PriceResponse(**response.json())
-        prices = price_response.prices
-    except Exception as e:
-        logger.warning("Failed to parse price response for %s: %s", ticker, e)
-        return []
-
-    if not prices:
-        return []
-
-    # Cache the results using the comprehensive cache key
-    _cache.set_prices(cache_key, [p.model_dump() for p in prices])
+    
+    # 将 Tushare 返回的 DataFrame 数据，转换成项目需要的 Price 对象列表
+    prices = []
+    for _, row in df.iterrows():
+        price = Price(
+            open=row['open'],
+            close=row['close'],
+            high=row['high'],
+            low=row['low'],
+            volume=row['vol'],  # 注意 Tushare 的成交量字段是 'vol'
+            date=row['trade_date']
+        )
+        prices.append(price)
+    
+    # 按日期升序排序，让数据从旧到新，方便后续分析
+    prices.sort(key=lambda x: x.date)
     return prices
 
-
-def get_financial_metrics(
-    ticker: str,
-    end_date: str,
-    period: str = "ttm",
-    limit: int = 10,
-    api_key: str = None,
-) -> list[FinancialMetrics]:
-    """Fetch financial metrics from cache or API."""
-    # Create a cache key that includes all parameters to ensure exact matches
-    cache_key = f"{ticker}_{period}_{end_date}_{limit}"
+async def get_financial_metrics(ticker: str) -> FinancialMetrics:
+    # 调用 Tushare 的 fina_indicator 接口获取主要财务指标
+    df = pro.fina_indicator(ts_code=ticker)
     
-    # Check cache first - simple exact match
-    if cached_data := _cache.get_financial_metrics(cache_key):
-        return [FinancialMetrics(**metric) for metric in cached_data]
-
-    # If not in cache, fetch from API
-    headers = {}
-    financial_api_key = api_key or os.environ.get("FINANCIAL_DATASETS_API_KEY")
-    if financial_api_key:
-        headers["X-API-KEY"] = financial_api_key
-
-    url = f"https://api.financialdatasets.ai/financial-metrics/?ticker={ticker}&report_period_lte={end_date}&limit={limit}&period={period}"
-    response = _make_api_request(url, headers)
-    if response.status_code != 200:
-        return []
-
-    # Parse response with Pydantic model
-    try:
-        metrics_response = FinancialMetricsResponse(**response.json())
-        financial_metrics = metrics_response.financial_metrics
-    except Exception as e:
-        logger.warning("Failed to parse financial metrics response for %s: %s", ticker, e)
-        return []
-
-    if not financial_metrics:
-        return []
-
-    # Cache the results as dicts using the comprehensive cache key
-    _cache.set_financial_metrics(cache_key, [m.model_dump() for m in financial_metrics])
-    return financial_metrics
+    # 如果获取到的数据为空，返回一个空的 FinancialMetrics 对象
+    if df.empty:
+        return FinancialMetrics()
+    
+    # 取最新一期（第一行）的数据
+    latest = df.iloc[0]
+    metrics = FinancialMetrics(
+        pe_ratio=latest.get('pe'),  # 市盈率
+        pb_ratio=latest.get('pb'),  # 市净率
+        roe=latest.get('roe'),      # 净资产收益率
+        market_cap=latest.get('market_cap')  # 市值
+    )
+    return metrics
 
 
 def search_line_items(
@@ -180,136 +146,47 @@ def search_line_items(
     return search_results[:limit]
 
 
-def get_insider_trades(
-    ticker: str,
-    end_date: str,
-    start_date: str | None = None,
-    limit: int = 1000,
-    api_key: str = None,
-) -> list[InsiderTrade]:
-    """Fetch insider trades from cache or API."""
-    # Create a cache key that includes all parameters to ensure exact matches
-    cache_key = f"{ticker}_{start_date or 'none'}_{end_date}_{limit}"
+async def get_insider_trades(ticker: str, start_date: str, end_date: str) -> List[InsiderTrade]:
+    # 调用 Tushare 的 disclosure 接口获取股东增减持信息
+    df = pro.disclosure(ts_code=ticker, start_date=start_date.replace('-', ''), end_date=end_date.replace('-', ''))
     
-    # Check cache first - simple exact match
-    if cached_data := _cache.get_insider_trades(cache_key):
-        return [InsiderTrade(**trade) for trade in cached_data]
-
-    # If not in cache, fetch from API
-    headers = {}
-    financial_api_key = api_key or os.environ.get("FINANCIAL_DATASETS_API_KEY")
-    if financial_api_key:
-        headers["X-API-KEY"] = financial_api_key
-
-    all_trades = []
-    current_end_date = end_date
-
-    while True:
-        url = f"https://api.financialdatasets.ai/insider-trades/?ticker={ticker}&filing_date_lte={current_end_date}"
-        if start_date:
-            url += f"&filing_date_gte={start_date}"
-        url += f"&limit={limit}"
-
-        response = _make_api_request(url, headers)
-        if response.status_code != 200:
-            break
-
-        try:
-            data = response.json()
-            response_model = InsiderTradeResponse(**data)
-            insider_trades = response_model.insider_trades
-        except Exception as e:
-            logger.warning("Failed to parse insider trades response for %s: %s", ticker, e)
-            break
-
-        if not insider_trades:
-            break
-
-        all_trades.extend(insider_trades)
-
-        # Only continue pagination if we have a start_date and got a full page
-        if not start_date or len(insider_trades) < limit:
-            break
-
-        # Update end_date to the oldest filing date from current batch for next iteration
-        current_end_date = min(trade.filing_date for trade in insider_trades).split("T")[0]
-
-        # If we've reached or passed the start_date, we can stop
-        if current_end_date <= start_date:
-            break
-
-    if not all_trades:
+    # 如果获取到的数据为空，直接返回空列表
+    if df.empty:
         return []
-
-    # Cache the results using the comprehensive cache key
-    _cache.set_insider_trades(cache_key, [trade.model_dump() for trade in all_trades])
-    return all_trades
-
-
-def get_company_news(
-    ticker: str,
-    end_date: str,
-    start_date: str | None = None,
-    limit: int = 1000,
-    api_key: str = None,
-) -> list[CompanyNews]:
-    """Fetch company news from cache or API."""
-    # Create a cache key that includes all parameters to ensure exact matches
-    cache_key = f"{ticker}_{start_date or 'none'}_{end_date}_{limit}"
     
-    # Check cache first - simple exact match
-    if cached_data := _cache.get_company_news(cache_key):
-        return [CompanyNews(**news) for news in cached_data]
+    # 将 Tushare 返回的 DataFrame 数据，转换成项目需要的 InsiderTrade 对象列表
+    trades = []
+    for _, row in df.iterrows():
+        trade = InsiderTrade(
+            transaction_shares=row.get('shares_change'),  # 变动股数
+            transaction_value=row.get('change_value'),   # 变动金额
+            transaction_date=row.get('ann_date')         # 公告日期
+        )
+        trades.append(trade)
+    
+    return trades
 
-    # If not in cache, fetch from API
-    headers = {}
-    financial_api_key = api_key or os.environ.get("FINANCIAL_DATASETS_API_KEY")
-    if financial_api_key:
-        headers["X-API-KEY"] = financial_api_key
 
-    all_news = []
-    current_end_date = end_date
-
-    while True:
-        url = f"https://api.financialdatasets.ai/news/?ticker={ticker}&end_date={current_end_date}"
-        if start_date:
-            url += f"&start_date={start_date}"
-        url += f"&limit={limit}"
-
-        response = _make_api_request(url, headers)
-        if response.status_code != 200:
-            break
-
-        try:
-            data = response.json()
-            response_model = CompanyNewsResponse(**data)
-            company_news = response_model.news
-        except Exception as e:
-            logger.warning("Failed to parse company news response for %s: %s", ticker, e)
-            break
-
-        if not company_news:
-            break
-
-        all_news.extend(company_news)
-
-        # Only continue pagination if we have a start_date and got a full page
-        if not start_date or len(company_news) < limit:
-            break
-
-        # Update end_date to the oldest date from current batch for next iteration
-        current_end_date = min(news.date for news in company_news).split("T")[0]
-
-        # If we've reached or passed the start_date, we can stop
-        if current_end_date <= start_date:
-            break
-
-    if not all_news:
+async def get_company_news(ticker: str, start_date: str, end_date: str) -> List[CompanyNews]:
+    # 调用 Tushare 的 news 接口获取公司新闻
+    df = pro.news(ts_code=ticker, start_date=start_date.replace('-', ''), end_date=end_date.replace('-', ''))
+    
+    # 如果获取到的数据为空，直接返回空列表
+    if df.empty:
         return []
-
-    # Cache the results using the comprehensive cache key
-    _cache.set_company_news(cache_key, [news.model_dump() for news in all_news])
-    return all_news
+    
+    # 将 Tushare 返回的 DataFrame 数据，转换成项目需要的 CompanyNews 对象列表
+    news_list = []
+    for _, row in df.iterrows():
+        news = CompanyNews(
+            title=row['title'],
+            content=row['content'],
+            source=row['source'],
+            datetime=row['datetime']
+        )
+        news_list.append(news)
+    
+    return news_list
 
 
 def get_market_cap(

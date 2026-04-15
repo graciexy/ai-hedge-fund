@@ -61,7 +61,7 @@ def _make_api_request(url: str, headers: dict, method: str = "GET", json_data: d
         return response
 
 
-async def get_prices(ticker: str, start_date: str, end_date: str) -> List[Price]:
+async def get_prices(ticker: str, start_date: str, end_date: str, **kwargs) -> List[Price]:
     # 调用 Tushare 的 daily 接口获取日线行情
     df = pro.daily(ts_code=ticker, start_date=start_date.replace('-', ''), end_date=end_date.replace('-', ''))
     
@@ -102,7 +102,7 @@ def prices_to_df(prices: List[Price]) -> 'pd.DataFrame':
     df = df.set_index('date')
     return df
 
-async def get_financial_metrics(ticker: str, end_date: str = None) -> FinancialMetrics:
+async def get_financial_metrics(ticker: str, end_date: str = None, **kwargs) -> FinancialMetrics:
     """获取财务指标，end_date 参数忽略（Tushare 返回最新数据）"""
     df = pro.fina_indicator(ts_code=ticker)
     if df.empty:
@@ -159,47 +159,47 @@ def search_line_items(
     return search_results[:limit]
 
 
-async def get_insider_trades(ticker: str, start_date: str = None, end_date: str = None) -> List[InsiderTrade]:
-    # 调用 Tushare 的 disclosure 接口获取股东增减持信息
-    df = pro.disclosure(ts_code=ticker, start_date=start_date.replace('-', ''), end_date=end_date.replace('-', ''))
-    
-    # 如果获取到的数据为空，直接返回空列表
-    if df.empty:
+async def get_insider_trades(ticker: str, start_date: str = None, end_date: str = None, **kwargs) -> List[InsiderTrade]:
+    """获取股东增减持信息"""
+    try:
+        df = pro.disclosure(ts_code=ticker, start_date=start_date.replace('-', '') if start_date else None,
+                            end_date=end_date.replace('-', '') if end_date else None)
+        if df.empty:
+            return []
+        trades = []
+        for _, row in df.iterrows():
+            trade = InsiderTrade(
+                transaction_shares=row.get('shares_change'),
+                transaction_value=row.get('change_value'),
+                transaction_date=row.get('ann_date')
+            )
+            trades.append(trade)
+        return trades
+    except Exception:
         return []
-    
-    # 将 Tushare 返回的 DataFrame 数据，转换成项目需要的 InsiderTrade 对象列表
-    trades = []
-    for _, row in df.iterrows():
-        trade = InsiderTrade(
-            transaction_shares=row.get('shares_change'),  # 变动股数
-            transaction_value=row.get('change_value'),   # 变动金额
-            transaction_date=row.get('ann_date')         # 公告日期
-        )
-        trades.append(trade)
-    
-    return trades
 
 
-async def get_company_news(ticker: str, start_date: str = None, end_date: str = None) -> List[CompanyNews]:
-    # 调用 Tushare 的 news 接口获取公司新闻
-    df = pro.news(ts_code=ticker, start_date=start_date.replace('-', ''), end_date=end_date.replace('-', ''))
-    
-    # 如果获取到的数据为空，直接返回空列表
-    if df.empty:
+
+async def get_company_news(ticker: str, start_date: str = None, end_date: str = None, **kwargs) -> List[CompanyNews]:
+    """获取公司新闻"""
+    # Tushare 新闻接口可能需要积分，若不可用则返回空列表
+    try:
+        df = pro.news(ts_code=ticker, start_date=start_date.replace('-', '') if start_date else None, 
+                      end_date=end_date.replace('-', '') if end_date else None)
+        if df.empty:
+            return []
+        news_list = []
+        for _, row in df.iterrows():
+            news = CompanyNews(
+                title=row.get('title', ''),
+                content=row.get('content', ''),
+                source=row.get('source', ''),
+                datetime=row.get('datetime', '')
+            )
+            news_list.append(news)
+        return news_list
+    except Exception:
         return []
-    
-    # 将 Tushare 返回的 DataFrame 数据，转换成项目需要的 CompanyNews 对象列表
-    news_list = []
-    for _, row in df.iterrows():
-        news = CompanyNews(
-            title=row['title'],
-            content=row['content'],
-            source=row['source'],
-            datetime=row['datetime']
-        )
-        news_list.append(news)
-    
-    return news_list
 
 async def get_company_facts(ticker: str) -> dict:
     """获取公司基本信息（名称、行业等）"""
@@ -212,6 +212,7 @@ async def get_company_facts(ticker: str) -> dict:
                 "industry": row.get('industry', 'Unknown'),
                 "list_date": row.get('list_date', ''),
                 "market": row.get('market', 'Unknown')
+                "description": f"{row.get('name', ticker)} is listed on {row.get('market', 'China')} market."
             }
     except Exception as e:
         print(f"Error fetching company facts for {ticker}: {e}")
@@ -255,15 +256,20 @@ def get_market_cap(
     return market_cap
 
 
-def prices_to_df(prices: list[Price]) -> pd.DataFrame:
-    """Convert prices to a DataFrame."""
-    df = pd.DataFrame([p.model_dump() for p in prices])
-    df["Date"] = pd.to_datetime(df["time"])
-    df.set_index("Date", inplace=True)
-    numeric_cols = ["open", "close", "high", "low", "volume"]
-    for col in numeric_cols:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-    df.sort_index(inplace=True)
+def prices_to_df(prices: List[Price]) -> 'pd.DataFrame':
+    """将 Price 列表转换为 DataFrame"""
+    import pandas as pd
+    data = {
+        'date': [p.date for p in prices],
+        'open': [p.open for p in prices],
+        'high': [p.high for p in prices],
+        'low': [p.low for p in prices],
+        'close': [p.close for p in prices],
+        'volume': [p.volume for p in prices],
+    }
+    df = pd.DataFrame(data)
+    df['date'] = pd.to_datetime(df['date'])
+    df = df.set_index('date')
     return df
 
 

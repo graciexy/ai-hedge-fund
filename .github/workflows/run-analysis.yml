@@ -20,7 +20,7 @@ jobs:
           pip install -e .
           pip install tushare
       - name: Run A-Share Analysis
-        run: python src/main.py --tickers "${{ vars.TICKERS }}"
+        run: python src/main.py --tickers "${{ vars.TICKERS }}"--analysts-all
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_API_BASE: ${{ vars.OPENAI_API_BASE }}

@@ -102,21 +102,17 @@ def prices_to_df(prices: List[Price]) -> 'pd.DataFrame':
     df = df.set_index('date')
     return df
 
-async def get_financial_metrics(ticker: str) -> FinancialMetrics:
-    # 调用 Tushare 的 fina_indicator 接口获取主要财务指标
+async def get_financial_metrics(ticker: str, end_date: str = None) -> FinancialMetrics:
+    """获取财务指标，end_date 参数忽略（Tushare 返回最新数据）"""
     df = pro.fina_indicator(ts_code=ticker)
-    
-    # 如果获取到的数据为空，返回一个空的 FinancialMetrics 对象
     if df.empty:
         return FinancialMetrics()
-    
-    # 取最新一期（第一行）的数据
     latest = df.iloc[0]
     metrics = FinancialMetrics(
-        pe_ratio=latest.get('pe'),  # 市盈率
-        pb_ratio=latest.get('pb'),  # 市净率
-        roe=latest.get('roe'),      # 净资产收益率
-        market_cap=latest.get('market_cap')  # 市值
+        pe_ratio=latest.get('pe'),
+        pb_ratio=latest.get('pb'),
+        roe=latest.get('roe'),
+        market_cap=latest.get('market_cap')
     )
     return metrics
 
@@ -163,7 +159,7 @@ def search_line_items(
     return search_results[:limit]
 
 
-async def get_insider_trades(ticker: str, start_date: str, end_date: str) -> List[InsiderTrade]:
+async def get_insider_trades(ticker: str, start_date: str = None, end_date: str = None) -> List[InsiderTrade]:
     # 调用 Tushare 的 disclosure 接口获取股东增减持信息
     df = pro.disclosure(ts_code=ticker, start_date=start_date.replace('-', ''), end_date=end_date.replace('-', ''))
     
@@ -184,7 +180,7 @@ async def get_insider_trades(ticker: str, start_date: str, end_date: str) -> Lis
     return trades
 
 
-async def get_company_news(ticker: str, start_date: str, end_date: str) -> List[CompanyNews]:
+async def get_company_news(ticker: str, start_date: str = None, end_date: str = None) -> List[CompanyNews]:
     # 调用 Tushare 的 news 接口获取公司新闻
     df = pro.news(ts_code=ticker, start_date=start_date.replace('-', ''), end_date=end_date.replace('-', ''))
     
@@ -204,6 +200,23 @@ async def get_company_news(ticker: str, start_date: str, end_date: str) -> List[
         news_list.append(news)
     
     return news_list
+
+async def get_company_facts(ticker: str) -> dict:
+    """获取公司基本信息（名称、行业等）"""
+    try:
+        df = pro.stock_basic(ts_code=ticker, fields='name,industry,list_date,market')
+        if not df.empty:
+            row = df.iloc[0]
+            return {
+                "name": row.get('name', ticker),
+                "industry": row.get('industry', 'Unknown'),
+                "list_date": row.get('list_date', ''),
+                "market": row.get('market', 'Unknown')
+            }
+    except Exception as e:
+        print(f"Error fetching company facts for {ticker}: {e}")
+    # 返回最小化信息，避免中断流程
+    return {"name": ticker, "industry": "Unknown", "description": "Data not available"}
 
 
 def get_market_cap(

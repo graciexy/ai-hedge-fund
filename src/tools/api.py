@@ -6,28 +6,25 @@ import pandas as pd
 from src.data.models import Price, FinancialMetrics, CompanyNews, InsiderTrade
 
 load_dotenv()
-
 TUSHARE_TOKEN = os.getenv("TUSHARE_TOKEN")
 if not TUSHARE_TOKEN:
-    raise ValueError("TUSHARE_TOKEN not found in environment variables")
-
+    raise ValueError("TUSHARE_TOKEN not found")
 ts.set_token(TUSHARE_TOKEN)
-pro = ts.pro_api()  # 全局 pro 对象
+pro = ts.pro_api()
 
 def _normalize_ticker(ticker: str) -> str:
-    """将可能包含多个代码的字符串转换为单个代码，并确保格式正确"""
-    # 如果包含空格，取第一个
+    """处理股票代码：如果传入多个代码（空格分隔），取第一个；并确保带后缀 .SH 或 .SZ"""
     if ' ' in ticker:
         ticker = ticker.split()[0]
-    # 确保格式如 000001.SZ
     if '.' not in ticker:
-        # 简单处理：上海市场加 .SH，深圳加 .SZ
+        # 根据常见规则：6开头为沪市 .SH，0或3开头为深市 .SZ
         if ticker.startswith('6'):
-            ticker = ticker + '.SH'
+            ticker = f"{ticker}.SH"
         else:
-            ticker = ticker + '.SZ'
+            ticker = f"{ticker}.SZ"
     return ticker
 
+# ==================== 价格数据 ====================
 def get_prices(ticker: str, start_date: str, end_date: str, **kwargs) -> List[Price]:
     ticker = _normalize_ticker(ticker)
     try:
@@ -48,9 +45,10 @@ def get_prices(ticker: str, start_date: str, end_date: str, **kwargs) -> List[Pr
         prices.sort(key=lambda x: x.date)
         return prices
     except Exception as e:
-        print(f"Error fetching prices for {ticker}: {e}")
+        print(f"Error in get_prices for {ticker}: {e}")
         return []
 
+# ==================== 财务指标 ====================
 def get_financial_metrics(ticker: str, end_date: str = None, **kwargs) -> FinancialMetrics:
     ticker = _normalize_ticker(ticker)
     try:
@@ -66,9 +64,10 @@ def get_financial_metrics(ticker: str, end_date: str = None, **kwargs) -> Financ
         )
         return metrics
     except Exception as e:
-        print(f"Error fetching financial metrics for {ticker}: {e}")
+        print(f"Error in get_financial_metrics for {ticker}: {e}")
         return FinancialMetrics()
 
+# ==================== 公司新闻 ====================
 def get_company_news(ticker: str, start_date: str = None, end_date: str = None, **kwargs) -> List[CompanyNews]:
     ticker = _normalize_ticker(ticker)
     try:
@@ -87,10 +86,10 @@ def get_company_news(ticker: str, start_date: str = None, end_date: str = None, 
             )
             news_list.append(news)
         return news_list
-    except Exception as e:
-        print(f"Error fetching news for {ticker}: {e}")
+    except Exception:
         return []
 
+# ==================== 内幕交易 ====================
 def get_insider_trades(ticker: str, start_date: str = None, end_date: str = None, **kwargs) -> List[InsiderTrade]:
     ticker = _normalize_ticker(ticker)
     try:
@@ -108,10 +107,10 @@ def get_insider_trades(ticker: str, start_date: str = None, end_date: str = None
             )
             trades.append(trade)
         return trades
-    except Exception as e:
-        print(f"Error fetching insider trades for {ticker}: {e}")
+    except Exception:
         return []
 
+# ==================== 公司概况 ====================
 def get_company_facts(ticker: str) -> dict:
     ticker = _normalize_ticker(ticker)
     try:
@@ -129,6 +128,36 @@ def get_company_facts(ticker: str) -> dict:
         print(f"Error fetching company facts for {ticker}: {e}")
     return {"name": ticker, "industry": "Unknown", "description": "Data not available"}
 
+# ==================== 市值 ====================
+def get_market_cap(ticker: str, **kwargs) -> float:
+    ticker = _normalize_ticker(ticker)
+    try:
+        # 使用 daily_basic 获取最新市值
+        df = pro.daily_basic(ts_code=ticker, fields='total_mv')
+        if not df.empty:
+            # total_mv 单位是万元，转换为元（根据项目可能需要调整）
+            return float(df.iloc[0]['total_mv']) * 10000
+    except Exception as e:
+        print(f"Error in get_market_cap for {ticker}: {e}")
+    return 0.0
+
+# ==================== 资产负债表 ====================
+def get_balance_sheet(ticker: str, **kwargs) -> Dict:
+    ticker = _normalize_ticker(ticker)
+    # 返回一个空字典，实际项目可能需要特定字段，可后续扩展
+    return {}
+
+# ==================== 现金流量表 ====================
+def get_cash_flow(ticker: str, **kwargs) -> Dict:
+    ticker = _normalize_ticker(ticker)
+    return {}
+
+# ==================== 利润表 ====================
+def get_income_statement(ticker: str, **kwargs) -> Dict:
+    ticker = _normalize_ticker(ticker)
+    return {}
+
+# ==================== 辅助函数 ====================
 def prices_to_df(prices: List[Price]) -> pd.DataFrame:
     data = {
         'date': [p.date for p in prices],

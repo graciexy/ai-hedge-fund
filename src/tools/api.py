@@ -211,7 +211,7 @@ async def get_company_facts(ticker: str) -> dict:
                 "name": row.get('name', ticker),
                 "industry": row.get('industry', 'Unknown'),
                 "list_date": row.get('list_date', ''),
-                "market": row.get('market', 'Unknown')
+                "market": row.get('market', 'Unknown'),
                 "description": f"{row.get('name', ticker)} is listed on {row.get('market', 'China')} market."
             }
     except Exception as e:

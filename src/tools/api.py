@@ -290,12 +290,9 @@ def get_company_facts(ticker: str) -> dict:
     return {"name": ticker, "industry": "Unknown", "description": "Data not available"}
 
 # ==================== 市值 ====================
-def get_market_cap(ticker: str, **kwargs) -> float:
+def get_market_cap(ticker: str, *args, **kwargs) -> float:
     ticker = _normalize_ticker(ticker)
     try:
-        # 1. 调用 Tushare 接口获取市值数据
-        # 2. 单位转换：Tushare 返回的 total_mv 单位是万元，需要转换为元
-        # 3. 返回市值数据，如果获取失败则返回 0.0
         df = pro.daily_basic(ts_code=ticker, fields='total_mv')
         if not df.empty:
             return float(df.iloc[0]['total_mv']) * 10000

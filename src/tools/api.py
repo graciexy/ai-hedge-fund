@@ -61,7 +61,7 @@ def _make_api_request(url: str, headers: dict, method: str = "GET", json_data: d
         return response
 
 
-async def get_prices(ticker: str, start_date: str, end_date: str, **kwargs) -> List[Price]:
+def get_prices(ticker: str, start_date: str, end_date: str, **kwargs) -> List[Price]:
     # 调用 Tushare 的 daily 接口获取日线行情
     df = pro.daily(ts_code=ticker, start_date=start_date.replace('-', ''), end_date=end_date.replace('-', ''))
     
@@ -102,7 +102,7 @@ def prices_to_df(prices: List[Price]) -> 'pd.DataFrame':
     df = df.set_index('date')
     return df
 
-async def get_financial_metrics(ticker: str, end_date: str = None, **kwargs) -> FinancialMetrics:
+def get_financial_metrics(ticker: str, end_date: str = None, **kwargs) -> FinancialMetrics:
     """获取财务指标，end_date 参数忽略（Tushare 返回最新数据）"""
     df = pro.fina_indicator(ts_code=ticker)
     if df.empty:
@@ -159,7 +159,7 @@ def search_line_items(
     return search_results[:limit]
 
 
-async def get_insider_trades(ticker: str, start_date: str = None, end_date: str = None, **kwargs) -> List[InsiderTrade]:
+def get_insider_trades(ticker: str, start_date: str = None, end_date: str = None, **kwargs) -> List[InsiderTrade]:
     """获取股东增减持信息"""
     try:
         df = pro.disclosure(ts_code=ticker, start_date=start_date.replace('-', '') if start_date else None,
@@ -180,7 +180,7 @@ async def get_insider_trades(ticker: str, start_date: str = None, end_date: str 
 
 
 
-async def get_company_news(ticker: str, start_date: str = None, end_date: str = None, **kwargs) -> List[CompanyNews]:
+def get_company_news(ticker: str, start_date: str = None, end_date: str = None, **kwargs) -> List[CompanyNews]:
     """获取公司新闻"""
     # Tushare 新闻接口可能需要积分，若不可用则返回空列表
     try:
@@ -201,9 +201,10 @@ async def get_company_news(ticker: str, start_date: str = None, end_date: str = 
     except Exception:
         return []
 
-async def get_company_facts(ticker: str) -> dict:
-    """获取公司基本信息（名称、行业等）"""
+def get_company_facts(ticker: str) -> dict:
+    """获取公司基本信息（同步）"""
     try:
+        # 注意：ticker 可能是 "605090.SH" 这样的单个代码
         df = pro.stock_basic(ts_code=ticker, fields='name,industry,list_date,market')
         if not df.empty:
             row = df.iloc[0]
@@ -216,8 +217,8 @@ async def get_company_facts(ticker: str) -> dict:
             }
     except Exception as e:
         print(f"Error fetching company facts for {ticker}: {e}")
-    # 返回最小化信息，避免中断流程
     return {"name": ticker, "industry": "Unknown", "description": "Data not available"}
+
 
 
 def get_market_cap(
@@ -256,9 +257,8 @@ def get_market_cap(
     return market_cap
 
 
-def prices_to_df(prices: List[Price]) -> 'pd.DataFrame':
+def prices_to_df(prices: List[Price]) -> pd.DataFrame:
     """将 Price 列表转换为 DataFrame"""
-    import pandas as pd
     data = {
         'date': [p.date for p in prices],
         'open': [p.open for p in prices],

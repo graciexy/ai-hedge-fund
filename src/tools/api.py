@@ -17,7 +17,6 @@ def _normalize_ticker(ticker: str) -> str:
     if ' ' in ticker:
         ticker = ticker.split()[0]
     if '.' not in ticker:
-        # 根据常见规则：6开头为沪市 .SH，0或3开头为深市 .SZ
         if ticker.startswith('6'):
             ticker = f"{ticker}.SH"
         else:
@@ -132,11 +131,9 @@ def get_company_facts(ticker: str) -> dict:
 def get_market_cap(ticker: str, **kwargs) -> float:
     ticker = _normalize_ticker(ticker)
     try:
-        # 使用 daily_basic 获取最新市值
         df = pro.daily_basic(ts_code=ticker, fields='total_mv')
         if not df.empty:
-            # total_mv 单位是万元，转换为元（根据项目可能需要调整）
-            return float(df.iloc[0]['total_mv']) * 10000
+            return float(df.iloc[0]['total_mv']) * 10000  # 万元转元
     except Exception as e:
         print(f"Error in get_market_cap for {ticker}: {e}")
     return 0.0
@@ -144,7 +141,7 @@ def get_market_cap(ticker: str, **kwargs) -> float:
 # ==================== 资产负债表 ====================
 def get_balance_sheet(ticker: str, **kwargs) -> Dict:
     ticker = _normalize_ticker(ticker)
-    # 返回一个空字典，实际项目可能需要特定字段，可后续扩展
+    # 返回空字典，避免程序崩溃；可根据需要扩展
     return {}
 
 # ==================== 现金流量表 ====================
@@ -156,6 +153,14 @@ def get_cash_flow(ticker: str, **kwargs) -> Dict:
 def get_income_statement(ticker: str, **kwargs) -> Dict:
     ticker = _normalize_ticker(ticker)
     return {}
+
+# ==================== 搜索财务报表行项目 ====================
+def search_line_items(ticker: str, line_items: List[str], period: str = "ttm", **kwargs) -> List[Dict]:
+    """
+    搜索财务报表行项目（占位实现）
+    原项目用于从财务报表中提取特定指标，这里返回空列表避免报错
+    """
+    return []
 
 # ==================== 辅助函数 ====================
 def prices_to_df(prices: List[Price]) -> pd.DataFrame:

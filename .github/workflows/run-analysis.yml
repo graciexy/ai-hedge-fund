@@ -1,0 +1,26 @@
+name: AI Hedge Fund Analysis
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 1 * * 1-5'
+
+jobs:
+  run-analysis:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install tushare
+      - name: Run A-Share Analysis
+        run: python main.py --tickers ${{ vars.TICKERS }}
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_API_BASE: ${{ vars.OPENAI_API_BASE }}
+          TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}

@@ -4,6 +4,7 @@ import os
 import pandas as pd
 import requests
 import time
+from typing import List, Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +85,22 @@ async def get_prices(ticker: str, start_date: str, end_date: str) -> List[Price]
     # 按日期升序排序，让数据从旧到新，方便后续分析
     prices.sort(key=lambda x: x.date)
     return prices
+
+def prices_to_df(prices: List[Price]) -> 'pd.DataFrame':
+    """将 Price 对象列表转换为 pandas DataFrame"""
+    import pandas as pd
+    data = {
+        'date': [p.date for p in prices],
+        'open': [p.open for p in prices],
+        'high': [p.high for p in prices],
+        'low': [p.low for p in prices],
+        'close': [p.close for p in prices],
+        'volume': [p.volume for p in prices],
+    }
+    df = pd.DataFrame(data)
+    df['date'] = pd.to_datetime(df['date'])
+    df = df.set_index('date')
+    return df
 
 async def get_financial_metrics(ticker: str) -> FinancialMetrics:
     # 调用 Tushare 的 fina_indicator 接口获取主要财务指标

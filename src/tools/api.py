@@ -320,7 +320,7 @@ def get_income_statement(ticker: str, **kwargs) -> Dict:
     return {}
 
 # ==================== 搜索财务报表行项目 ====================
-def search_line_items(ticker: str, line_items: List[str], period: str = "ttm", **kwargs) -> List[Dict]:
+def search_line_items(ticker: str, line_items: List[str], **kwargs) -> List[Dict]:
     """
     搜索财务报表行项目（占位实现）
     原项目用于从财务报表中提取特定指标，这里返回空列表避免报错

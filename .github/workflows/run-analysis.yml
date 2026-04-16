@@ -29,13 +29,13 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        # 直接安装所有关键依赖（不使用缓存）
-        pip install --no-cache-dir tushare pandas pydantic python-dotenv langgraph langchain-openai
+        # 安装所有关键依赖
+        pip install --no-cache-dir tushare pandas pydantic python-dotenv langgraph langchain-openai colorama requests numpy
         
     - name: Verify installations
       run: |
         echo "Checking installed packages:"
-        pip list | grep -E "(tushare|pandas|pydantic|langgraph|langchain)"
+        pip list | grep -E "(tushare|pandas|pydantic|langgraph|langchain|colorama)"
         
     - name: Verify api.py changes
       run: |

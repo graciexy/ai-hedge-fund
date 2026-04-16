@@ -3,6 +3,8 @@ import tushare as ts
 from dotenv import load_dotenv
 from typing import List, Optional, Dict, Any
 import pandas as pd
+from functools import lru_cache
+from types import SimpleNamespace
 from src.data.models import Price, FinancialMetrics, CompanyNews, InsiderTrade
 
 load_dotenv()
@@ -13,7 +15,6 @@ ts.set_token(TUSHARE_TOKEN)
 pro = ts.pro_api()
 
 def _normalize_ticker(ticker: str) -> str:
-    """标准化股票代码格式"""
     if ' ' in ticker:
         ticker = ticker.split()[0]
     if '.' not in ticker:
@@ -23,11 +24,27 @@ def _normalize_ticker(ticker: str) -> str:
             ticker = f"{ticker}.SZ"
     return ticker
 
-# ==================== 价格数据 ====================
+# ==================== 简单缓存装饰器 ====================
+def cache_result(ttl=3600):
+    """简单内存缓存，避免同一股票重复请求"""
+    cache = {}
+    def decorator(func):
+        def wrapper(ticker, *args, **kwargs):
+            key = f"{ticker}_{args}_{tuple(sorted(kwargs.items()))}"
+            if key in cache:
+                return cache[key]
+            result = func(ticker, *args, **kwargs)
+            cache[key] = result
+            return result
+        return wrapper
+    return decorator
+
+# ==================== 价格数据（带后复权） ====================
 def get_prices(ticker: str, start_date: str, end_date: str, **kwargs) -> List[Price]:
     ticker = _normalize_ticker(ticker)
     try:
-        df = pro.daily(ts_code=ticker, start_date=start_date.replace('-', ''), end_date=end_date.replace('-', ''))
+        # 使用 pro_bar 获取后复权价格（hfq），保证价格连续性
+        df = ts.pro_bar(ts_code=ticker, start_date=start_date, end_date=end_date, adj='hfq')
         if df.empty:
             return []
         prices = []
@@ -47,112 +64,138 @@ def get_prices(ticker: str, start_date: str, end_date: str, **kwargs) -> List[Pr
         print(f"Error in get_prices for {ticker}: {e}")
         return []
 
-# ==================== 财务指标 ====================
+# ==================== 财务指标（多期列表） ====================
+@cache_result()
 def get_financial_metrics(ticker: str, end_date: str = None, **kwargs) -> List[FinancialMetrics]:
     """
-    获取财务指标，返回列表（原项目期望列表，用于多期分析）
+    返回多期财务数据列表（最近4期），满足原项目对 len(metrics) 的依赖
     """
     ticker = _normalize_ticker(ticker)
-    # 准备一个包含所有字段的默认字典
-    default_metrics_dict = {
-        'ticker': ticker,
-        'report_period': '',
-        'period': kwargs.get('period', 'annual'),
-        'currency': 'CNY',
-        'market_cap': None,
-        'enterprise_value': None,
-        'price_to_earnings_ratio': None,
-        'price_to_book_ratio': None,
-        'price_to_sales_ratio': None,
-        'enterprise_value_to_ebitda_ratio': None,
-        'enterprise_value_to_revenue_ratio': None,
-        'free_cash_flow_yield': None,
-        'peg_ratio': None,
-        'gross_margin': None,
-        'operating_margin': None,
-        'net_margin': None,
-        'return_on_equity': None,
-        'return_on_assets': None,
-        'return_on_invested_capital': None,
-        'asset_turnover': None,
-        'inventory_turnover': None,
-        'receivables_turnover': None,
-        'days_sales_outstanding': None,
-        'operating_cycle': None,
-        'working_capital_turnover': None,
-        'current_ratio': None,
-        'quick_ratio': None,
-        'cash_ratio': None,
-        'operating_cash_flow_ratio': None,
-        'debt_to_equity': None,
-        'debt_to_assets': None,
-        'interest_coverage': None,
-        'revenue_growth': None,
-        'earnings_growth': None,
-        'book_value_growth': None,
-        'earnings_per_share_growth': None,
-        'free_cash_flow_growth': None,
-        'operating_income_growth': None,
-        'ebitda_growth': None,
-        'payout_ratio': None,
-        'earnings_per_share': None,
-        'book_value_per_share': None,
-        'free_cash_flow_per_share': None,
-    }
+    metrics_list = []
+
     try:
-        # 获取基础财务指标
-        df_indicator = pro.fina_indicator(ts_code=ticker)
-        if not df_indicator.empty:
-            latest = df_indicator.iloc[0]
-            default_metrics_dict.update({
-                'report_period': latest.get('end_date', ''),
-                'price_to_earnings_ratio': latest.get('pe'),
-                'price_to_book_ratio': latest.get('pb'),
-                'price_to_sales_ratio': latest.get('ps'),
-                'gross_margin': latest.get('gross_margin'),
-                'operating_margin': latest.get('operating_margin'),
-                'net_margin': latest.get('net_margin'),
-                'return_on_equity': latest.get('roe'),
-                'return_on_assets': latest.get('roa'),
-                'asset_turnover': latest.get('asset_turnover'),
-                'inventory_turnover': latest.get('inventory_turnover'),
-                'receivables_turnover': latest.get('receivables_turnover'),
-                'operating_cycle': latest.get('operating_cycle'),
-                'working_capital_turnover': latest.get('working_capital_turnover'),
-                'current_ratio': latest.get('current_ratio'),
-                'quick_ratio': latest.get('quick_ratio'),
-                'debt_to_equity': latest.get('debt_to_equity'),
-                'interest_coverage': latest.get('interest_coverage'),
-                'revenue_growth': latest.get('revenue_growth'),
-                'earnings_growth': latest.get('earnings_growth'),
-                'operating_income_growth': latest.get('operating_income_growth'),
-                'earnings_per_share': latest.get('eps'),
-                'book_value_per_share': latest.get('bps'),
-            })
-        # 获取每日基本面
+        # 1. 获取基础财务指标（fina_indicator）
+        df_ind = pro.fina_indicator(ts_code=ticker)
+        if df_ind.empty:
+            return []   # 无数据返回空列表
+
+        # 按报告期排序，取最近4期
+        df_ind = df_ind.sort_values('end_date', ascending=False).head(4)
+
+        # 2. 获取每日基本面（用于估值指标）
         df_daily = pro.daily_basic(ts_code=ticker)
-        if not df_daily.empty:
-            latest_daily = df_daily.iloc[0]
-            if default_metrics_dict['market_cap'] is None:
-                default_metrics_dict['market_cap'] = latest_daily.get('total_mv') * 10000 if latest_daily.get('total_mv') else None
-            if default_metrics_dict['price_to_earnings_ratio'] is None:
-                default_metrics_dict['price_to_earnings_ratio'] = latest_daily.get('pe')
-            if default_metrics_dict['price_to_book_ratio'] is None:
-                default_metrics_dict['price_to_book_ratio'] = latest_daily.get('pb')
-            if default_metrics_dict['price_to_sales_ratio'] is None:
-                default_metrics_dict['price_to_sales_ratio'] = latest_daily.get('ps')
+        latest_daily = df_daily.iloc[0] if not df_daily.empty else None
+
+        # 3. 获取利润表、资产负债表、现金流量表（用于高级计算）
+        df_income = pro.income(ts_code=ticker)
+        df_balance = pro.balancesheet(ts_code=ticker)
+        df_cashflow = pro.cashflow(ts_code=ticker)
+
+        for _, row in df_ind.iterrows():
+            report_period = row.get('end_date', '')
+
+            # --- 基础估值数据（优先用 daily_basic 的最新值） ---
+            market_cap = None
+            pe = row.get('pe')
+            pb = row.get('pb')
+            ps = row.get('ps')
+            if latest_daily is not None:
+                market_cap = latest_daily.get('total_mv') * 10000 if latest_daily.get('total_mv') else None
+                if pe is None:
+                    pe = latest_daily.get('pe')
+                if pb is None:
+                    pb = latest_daily.get('pb')
+                if ps is None:
+                    ps = latest_daily.get('ps')
+
+            # --- 计算 Enterprise Value (EV) = 市值 + 总负债 - 现金及等价物 ---
+            enterprise_value = None
+            if market_cap is not None and not df_balance.empty:
+                balance_row = df_balance.iloc[0]  # 取最新一期
+                total_liab = balance_row.get('total_liab')
+                cash_eq = balance_row.get('money_cap')
+                if total_liab is not None and cash_eq is not None:
+                    enterprise_value = market_cap + total_liab - cash_eq
+
+            # --- 计算 Free Cash Flow (FCF) = 经营现金流 - 资本支出 ---
+            free_cash_flow = None
+            free_cash_flow_yield = None
+            if not df_cashflow.empty:
+                cf_row = df_cashflow.iloc[0]
+                ocf = cf_row.get('n_cashflow_act')      # 经营活动现金流净额
+                capex = cf_row.get('c_pay_acq_const_fiolta')  # 购建固定资产支付的现金
+                if ocf is not None and capex is not None:
+                    free_cash_flow = ocf - capex
+                    if market_cap and market_cap > 0:
+                        free_cash_flow_yield = free_cash_flow / market_cap
+
+            # --- 构建 FinancialMetrics 对象 ---
+            metrics = FinancialMetrics(
+                ticker=ticker,
+                report_period=report_period,
+                period=kwargs.get('period', 'annual'),
+                currency='CNY',
+
+                # 估值指标
+                market_cap=market_cap,
+                enterprise_value=enterprise_value,
+                price_to_earnings_ratio=pe,
+                price_to_book_ratio=pb,
+                price_to_sales_ratio=ps,
+                enterprise_value_to_ebitda_ratio=None,  # 需要 EBITDA，暂不计算
+                enterprise_value_to_revenue_ratio=enterprise_value / row.get('revenue') if enterprise_value and row.get('revenue') else None,
+                free_cash_flow_yield=free_cash_flow_yield,
+                peg_ratio=None,  # 需要增长率，后续可算
+
+                # 利润率
+                gross_margin=row.get('gross_margin'),
+                operating_margin=row.get('operating_margin'),
+                net_margin=row.get('net_margin'),
+
+                # 回报率
+                return_on_equity=row.get('roe'),
+                return_on_assets=row.get('roa'),
+                return_on_invested_capital=None,
+
+                # 营运能力
+                asset_turnover=row.get('asset_turnover'),
+                inventory_turnover=row.get('inventory_turnover'),
+                receivables_turnover=row.get('receivables_turnover'),
+                days_sales_outstanding=None,
+                operating_cycle=row.get('operating_cycle'),
+                working_capital_turnover=row.get('working_capital_turnover'),
+
+                # 偿债能力
+                current_ratio=row.get('current_ratio'),
+                quick_ratio=row.get('quick_ratio'),
+                cash_ratio=None,
+                operating_cash_flow_ratio=None,
+                debt_to_equity=row.get('debt_to_equity'),
+                debt_to_assets=None,   # 可从资产负债表计算，暂略
+                interest_coverage=row.get('interest_coverage'),
+
+                # 增长指标
+                revenue_growth=row.get('revenue_growth'),
+                earnings_growth=row.get('earnings_growth'),
+                book_value_growth=None,
+                earnings_per_share_growth=None,
+                free_cash_flow_growth=None,
+                operating_income_growth=row.get('operating_income_growth'),
+                ebitda_growth=None,
+                payout_ratio=None,
+
+                # 每股指标
+                earnings_per_share=row.get('eps'),
+                book_value_per_share=row.get('bps'),
+                free_cash_flow_per_share=free_cash_flow / row.get('total_share') if free_cash_flow and row.get('total_share') else None,
+            )
+            metrics_list.append(metrics)
+
     except Exception as e:
         print(f"Error in get_financial_metrics for {ticker}: {e}")
-    # 确保 report_period 不为 None
-    if default_metrics_dict['report_period'] is None:
-        default_metrics_dict['report_period'] = ''
-    # 确保 period 不为 None
-    if default_metrics_dict['period'] is None:
-        default_metrics_dict['period'] = 'annual'
-    # 创建 FinancialMetrics 对象
-    metrics_obj = FinancialMetrics(**default_metrics_dict)
-    # 返回列表（只有一个元素）
-    return [metrics_obj]
+        return []
+
+    return metrics_list   # 返回列表，原项目可 len() 和遍历
 
 # ==================== 公司新闻 ====================
 def get_company_news(ticker: str, start_date: str = None, end_date: str = None, **kwargs) -> List[CompanyNews]:
@@ -179,7 +222,7 @@ def get_company_news(ticker: str, start_date: str = None, end_date: str = None, 
     except Exception:
         return []
 
-# ==================== 内幕交易 ====================
+# ==================== 内幕交易（股东增减持） ====================
 def get_insider_trades(ticker: str, start_date: str = None, end_date: str = None, **kwargs) -> List[InsiderTrade]:
     ticker = _normalize_ticker(ticker)
     try:
@@ -228,175 +271,81 @@ def get_company_facts(ticker: str) -> dict:
         print(f"Error fetching company facts for {ticker}: {e}")
     return {"name": ticker, "industry": "Unknown", "description": "Data not available"}
 
-# ==================== 市值 ====================
+# ==================== 市值（已整合到财务指标中，但保留独立函数） ====================
 def get_market_cap(ticker: str, *args, **kwargs) -> float:
     ticker = _normalize_ticker(ticker)
     try:
         df = pro.daily_basic(ts_code=ticker, fields='total_mv')
         if not df.empty:
-            return float(df.iloc[0]['total_mv']) * 10000  # 万元转元
+            return float(df.iloc[0]['total_mv']) * 10000
     except Exception as e:
         print(f"Error in get_market_cap for {ticker}: {e}")
     return 0.0
 
-# ==================== 资产负债表 ====================
+# ==================== 资产负债表（返回列表，供其他函数使用） ====================
 def get_balance_sheet(ticker: str, **kwargs) -> List[Dict]:
     ticker = _normalize_ticker(ticker)
     try:
         df = pro.balancesheet(ts_code=ticker)
-        if not df.empty:
-            return df.to_dict('records')
+        if df.empty:
+            return []
+        return df.to_dict(orient='records')
     except Exception:
-        pass
-    return []
+        return []
 
 # ==================== 现金流量表 ====================
 def get_cash_flow(ticker: str, **kwargs) -> List[Dict]:
     ticker = _normalize_ticker(ticker)
     try:
         df = pro.cashflow(ts_code=ticker)
-        if not df.empty:
-            return df.to_dict('records')
+        if df.empty:
+            return []
+        return df.to_dict(orient='records')
     except Exception:
-        pass
-    return []
+        return []
 
 # ==================== 利润表 ====================
 def get_income_statement(ticker: str, **kwargs) -> List[Dict]:
     ticker = _normalize_ticker(ticker)
     try:
         df = pro.income(ts_code=ticker)
-        if not df.empty:
-            return df.to_dict('records')
+        if df.empty:
+            return []
+        return df.to_dict(orient='records')
     except Exception:
-        pass
-    return []
+        return []
 
-# ==================== 搜索财务报表行项目 ====================
-def search_line_items(*args, **kwargs):
+# ==================== 搜索财务报表行项目（返回真实对象列表） ====================
+def search_line_items(*args, **kwargs) -> List[Any]:
     """
-    搜索特定财务报表项目 - A股Tushare适配版
-    兼容所有调用方式：位置参数、关键字参数、混合参数
+    返回一个包含真实财务行项目数据的对象列表，每个对象具有 earnings_per_share, revenue 等属性。
+    这里简化：从利润表获取最近一期数据。
     """
-    # 参数提取
-    ticker = None
-    line_items = None
-    period = "ttm"
-    limit = 10
-    end_date = None
-    api_key = None
-    
-    # 从位置参数提取
-    if len(args) >= 1:
-        ticker = args[0]
-    if len(args) >= 2:
-        line_items = args[1]
-    if len(args) >= 3:
-        period = args[2]
-    if len(args) >= 4:
-        limit = args[3]
-    
-    # 从关键字参数提取（覆盖位置参数）
-    ticker = kwargs.get('ticker', ticker)
-    line_items = kwargs.get('line_items', line_items)
-    period = kwargs.get('period', period)
-    limit = kwargs.get('limit', limit)
-    end_date = kwargs.get('end_date', None)
-    api_key = kwargs.get('api_key', None)
-    
-    if not ticker or not line_items:
+    ticker = kwargs.get('ticker') or (args[0] if args else None)
+    if not ticker:
         return []
-    
     ticker = _normalize_ticker(ticker)
-    
-    # 字段映射表
-    FIELD_MAP = {
-        "revenue": "total_revenue",
-        "operating_income": "operate_income",
-        "net_income": "n_income",
-        "total_assets": "total_assets",
-        "shareholders_equity": "total_hldr_eqy_exc_min_int",
-        "cash_and_equivalents": "money_cap",
-        "total_debt": "total_liabilities",
-        "inventory": "inventories",
-        "accounts_receivable": "accounts_receiv",
-        "operating_cash_flow": "n_cashflow_act",
-    }
-    
-    results = []
-    
     try:
-        # 查询利润表
-        income_fields = [(item, FIELD_MAP[item]) for item in line_items 
-                        if item in FIELD_MAP and FIELD_MAP[item] in 
-                        ["total_revenue", "operate_income", "n_income"]]
-        
-        if income_fields:
-            df = pro.income(ts_code=ticker, limit=limit)
-            if not df.empty:
-                for std_name, ts_name in income_fields:
-                    if ts_name in df.columns:
-                        for _, row in df.iterrows():
-                            if pd.notna(row[ts_name]):
-                                results.append({
-                                    'ticker': ticker,
-                                    'line_item': std_name,
-                                    'value': float(row[ts_name]),
-                                    'report_period': str(row.get('end_date', '')),
-                                    'period': period,
-                                    'currency': 'CNY'
-                                })
-        
-        # 查询资产负债表
-        balance_fields = [(item, FIELD_MAP[item]) for item in line_items 
-                         if item in FIELD_MAP and FIELD_MAP[item] in 
-                         ["total_assets", "total_liabilities", "total_hldr_eqy_exc_min_int", 
-                          "money_cap", "inventories", "accounts_receiv"]]
-        
-        if balance_fields:
-            df = pro.balancesheet(ts_code=ticker, limit=limit)
-            if not df.empty:
-                for std_name, ts_name in balance_fields:
-                    if ts_name in df.columns:
-                        for _, row in df.iterrows():
-                            if pd.notna(row[ts_name]):
-                                dup = any(r for r in results 
-                                         if r['line_item'] == std_name 
-                                         and r['report_period'] == str(row.get('end_date', '')))
-                                if not dup:
-                                    results.append({
-                                        'ticker': ticker,
-                                        'line_item': std_name,
-                                        'value': float(row[ts_name]),
-                                        'report_period': str(row.get('end_date', '')),
-                                        'period': period,
-                                        'currency': 'CNY'
-                                    })
-        
-        # 查询现金流量表
-        if "free_cash_flow" in line_items or any("cash" in item for item in line_items):
-            df = pro.cashflow(ts_code=ticker, limit=limit)
-            if not df.empty:
-                if "free_cash_flow" in line_items:
-                    for _, row in df.iterrows():
-                        ocf = row.get("n_cashflow_act")
-                        if pd.notna(ocf):
-                            capex = row.get("c_paid_for_assets")
-                            fcf = float(ocf) - (abs(float(capex)) if pd.notna(capex) else 0)
-                            results.append({
-                                'ticker': ticker,
-                                'line_item': "free_cash_flow",
-                                'value': fcf,
-                                'report_period': str(row.get('end_date', '')),
-                                'period': period,
-                                'currency': 'CNY'
-                            })
-        
-        return results
-        
-    except Exception as e:
-        print(f"Error in search_line_items for {ticker}: {e}")
+        df = pro.income(ts_code=ticker)
+        if df.empty:
+            return []
+        row = df.iloc[0]
+        # 使用 SimpleNamespace 创建具有属性的对象
+        item = SimpleNamespace(
+            earnings_per_share=row.get('basic_eps'),
+            revenue=row.get('revenue'),
+            net_income=row.get('n_income'),
+            ebitda=None,   # 可从 cashflow 计算，暂略
+            free_cash_flow=None,
+            operating_cash_flow=None,
+            total_assets=None,
+            total_liabilities=None,
+        )
+        return [item]
+    except Exception:
+        # 失败时返回空列表，避免崩溃
         return []
+
 # ==================== 辅助函数 ====================
 def prices_to_df(prices: List[Price]) -> pd.DataFrame:
     data = {

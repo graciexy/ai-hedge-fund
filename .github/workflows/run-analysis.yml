@@ -11,22 +11,19 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-
+      
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
-
+        
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        # 安装项目核心依赖
         pip install -e .
-        # 安装 Tushare（A股数据源）
         pip install tushare
-        # 安装所有可能用到的 LangChain 扩展（解决 ModuleNotFoundError）
         pip install langchain-deepseek langchain-anthropic langchain-google-genai langchain-groq langchain-xai langchain-gigachat langchain-ollama
-
+        
     - name: Run A-Share Analysis
       env:
         TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}

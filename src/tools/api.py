@@ -317,31 +317,216 @@ def get_income_statement(ticker: str, **kwargs) -> List[Dict]:
     return []
 
 # ==================== 搜索财务报表行项目 ====================
-def search_line_items(ticker: str, line_items: List[str], **kwargs) -> List[Dict]:
+def search_line_items(
+    ticker: str,
+    line_items: List[str],
+    period: str = "ttm",
+    limit: int = 10,
+    end_date: str = None,
+    **kwargs
+) -> List[Dict]:
     """
-    搜索特定财务报表项目 - A股适配版
+    搜索特定财务报表项目 - A股Tushare适配版
+    
+    Args:
+        ticker: 股票代码，如 "000001.SZ"
+        line_items: 财务项目列表，如 ["revenue", "net_income", "total_assets"]
+        period: 报告周期，"ttm"|"annual"|"quarterly"（A股主要用annual）
+        limit: 返回记录数量
+        end_date: 结束日期，格式 "2024-12-31"
+        **kwargs: 其他参数（兼容原API）
+    
+    Returns:
+        List[Dict]: 财务数据列表，每项包含 ticker, line_item, value, report_period, period, currency
     """
     ticker = _normalize_ticker(ticker)
     results = []
     
+    # Tushare 字段映射：标准字段名 -> Tushare字段名
+    # 注意：Tushare不同接口字段名不同，需分别处理
+    field_mapping = {
+        # 利润表字段 (pro.income)
+        "revenue": "total_revenue",           # 营业总收入
+        "operating_income": "operate_income", # 营业收入
+        "operating_expense": "operate_expense", # 营业支出
+        "net_income": "n_income",             # 净利润（注意：不是net_profit）
+        "total_profit": "total_profit",       # 利润总额
+        "income_tax": "income_tax",          # 所得税
+        "basic_eps": "basic_eps",            # 基本每股收益
+        
+        # 资产负债表字段 (pro.balancesheet)
+        "total_assets": "total_assets",
+        "total_liabilities": "total_liabilities",
+        "shareholders_equity": "total_hldr_eqy_exc_min_int",  # 股东权益(不含少数股东)
+        "cash_and_equivalents": "money_cap",   # 货币资金
+        "trading_fin_assets": "trading_fin_assets", # 交易性金融资产
+        "inventory": "inventories",           # 存货
+        "accounts_receivable": "accounts_receiv",  # 应收账款
+        "notes_receivable": "notes_receiv",    # 应收票据
+        "fixed_assets": "fix_assets",          # 固定资产
+        "goodwill": "goodwill",               # 商誉
+        
+        # 现金流量表字段 (pro.cashflow)
+        "operating_cash_flow": "n_cashflow_act",  # 经营活动现金流净额
+        "investing_cash_flow": "n_cashflow_inv_act", # 投资活动现金流净额
+        "financing_cash_flow": "n_cashflow_fin_act",  # 筹资活动现金流净额
+        "free_cash_flow": None,  # 需计算：经营现金流 - 购建固定资产现金
+        "capex": "c_paid_for_assets",  # 购建固定资产、无形资产支付的现金
+    }
+    
     try:
-        # 尝试从利润表获取
-        df_income = pro.income(ts_code=ticker)
-        if not df_income.empty:
-            for item in line_items:
-                if item in df_income.columns:
-                    results.append({
-                        'ticker': ticker,
-                        'line_item': item,
-                        'value': df_income.iloc[0].get(item),
-                        'report_period': df_income.iloc[0].get('end_date'),
-                        'period': 'annual'
-                    })
+        # 确定查询年份（A股年报）
+        if end_date:
+            year = end_date[:4]
+        else:
+            year = None
+        
+        # 1. 查询利润表数据
+        income_fields = {k: v for k, v in field_mapping.items() if k in [
+            "revenue", "operating_income", "operating_expense", "net_income", 
+            "total_profit", "income_tax", "basic_eps"
+        ] and v is not None}
+        
+        if any(item in income_fields for item in line_items):
+            try:
+                df_income = pro.income(ts_code=ticker, start_date=f"{int(year)-5}0101" if year else None, end_date=f"{year}1231" if year else None)
+                if not df_income.empty:
+                    for item in line_items:
+                        tushare_field = income_fields.get(item)
+                        if tushare_field and tushare_field in df_income.columns:
+                            for idx, row in df_income.head(limit).iterrows():
+                                if pd.notna(row.get(tushare_field)):
+                                    results.append({
+                                        'ticker': ticker,
+                                        'line_item': item,
+                                        'value': float(row[tushare_field]),
+                                        'report_period': row.get('end_date'),
+                                        'period': period,
+                                        'currency': 'CNY'
+                                    })
+            except Exception as e:
+                print(f"Error fetching income data for {ticker}: {e}")
+        
+        # 2. 查询资产负债表数据
+        balance_fields = {k: v for k, v in field_mapping.items() if k in [
+            "total_assets", "total_liabilities", "shareholders_equity",
+            "cash_and_equivalents", "trading_fin_assets", "inventory",
+            "accounts_receivable", "notes_receivable", "fixed_assets", "goodwill"
+        ] and v is not None}
+        
+        if any(item in balance_fields for item in line_items):
+            try:
+                df_balance = pro.balancesheet(ts_code=ticker, start_date=f"{int(year)-5}0101" if year else None, end_date=f"{year}1231" if year else None)
+                if not df_balance.empty:
+                    for item in line_items:
+                        tushare_field = balance_fields.get(item)
+                        if tushare_field and tushare_field in df_balance.columns:
+                            for idx, row in df_balance.head(limit).iterrows():
+                                if pd.notna(row.get(tushare_field)):
+                                    # 避免重复
+                                    exists = any(r['line_item'] == item and r['report_period'] == row.get('end_date') for r in results)
+                                    if not exists:
+                                        results.append({
+                                            'ticker': ticker,
+                                            'line_item': item,
+                                            'value': float(row[tushare_field]),
+                                            'report_period': row.get('end_date'),
+                                            'period': period,
+                                            'currency': 'CNY'
+                                        })
+            except Exception as e:
+                print(f"Error fetching balance sheet for {ticker}: {e}")
+        
+        # 3. 查询现金流量表数据
+        cashflow_fields = {k: v for k, v in field_mapping.items() if k in [
+            "operating_cash_flow", "investing_cash_flow", "financing_cash_flow", "capex"
+        ] and v is not None}
+        
+        if any(item in list(cashflow_fields.keys()) + ["free_cash_flow"] for item in line_items):
+            try:
+                df_cashflow = pro.cashflow(ts_code=ticker, start_date=f"{int(year)-5}0101" if year else None, end_date=f"{year}1231" if year else None)
+                if not df_cashflow.empty:
+                    # 处理直接存在的字段
+                    for item in line_items:
+                        if item == "free_cash_flow":
+                            # 计算自由现金流 = 经营现金流 - 资本支出
+                            for idx, row in df_cashflow.head(limit).iterrows():
+                                ocf = row.get("n_cashflow_act")
+                                capex = row.get("c_paid_for_assets")
+                                if pd.notna(ocf) and pd.notna(capex):
+                                    fcf = float(ocf) - abs(float(capex))
+                                    results.append({
+                                        'ticker': ticker,
+                                        'line_item': "free_cash_flow",
+                                        'value': fcf,
+                                        'report_period': row.get('end_date'),
+                                        'period': period,
+                                        'currency': 'CNY'
+                                    })
+                        else:
+                            tushare_field = cashflow_fields.get(item)
+                            if tushare_field and tushare_field in df_cashflow.columns:
+                                for idx, row in df_cashflow.head(limit).iterrows():
+                                    if pd.notna(row.get(tushare_field)):
+                                        exists = any(r['line_item'] == item and r['report_period'] == row.get('end_date') for r in results)
+                                        if not exists:
+                                            results.append({
+                                                'ticker': ticker,
+                                                'line_item': item,
+                                                'value': float(row[tushare_field]),
+                                                'report_period': row.get('end_date'),
+                                                'period': period,
+                                                'currency': 'CNY'
+                                            })
+            except Exception as e:
+                print(f"Error fetching cash flow for {ticker}: {e}")
+        
+        # 4. 处理特殊计算字段
+        # 如 working_capital = 流动资产 - 流动负债
+        if "working_capital" in line_items:
+            try:
+                df_balance = pro.balancesheet(ts_code=ticker, start_date=f"{int(year)-5}0101" if year else None, end_date=f"{year}1231" if year else None)
+                if not df_balance.empty and 'total_cur_assets' in df_balance.columns and 'total_cur_liab' in df_balance.columns:
+                    for idx, row in df_balance.head(limit).iterrows():
+                        if pd.notna(row.get('total_cur_assets')) and pd.notna(row.get('total_cur_liab')):
+                            wc = float(row['total_cur_assets']) - float(row['total_cur_liab'])
+                            results.append({
+                                'ticker': ticker,
+                                'line_item': "working_capital",
+                                'value': wc,
+                                'report_period': row.get('end_date'),
+                                'period': period,
+                                'currency': 'CNY'
+                            })
+            except Exception as e:
+                print(f"Error calculating working capital for {ticker}: {e}")
+        
+        # 5. 处理 total_debt（总负债）
+        if "total_debt" in line_items:
+            try:
+                df_balance = pro.balancesheet(ts_code=ticker, start_date=f"{int(year)-5}0101" if year else None, end_date=f"{year}1231" if year else None)
+                if not df_balance.empty and 'total_liabilities' in df_balance.columns:
+                    for idx, row in df_balance.head(limit).iterrows():
+                        if pd.notna(row.get('total_liabilities')):
+                            exists = any(r['line_item'] == "total_debt" and r['report_period'] == row.get('end_date') for r in results)
+                            if not exists:
+                                results.append({
+                                    'ticker': ticker,
+                                    'line_item': "total_debt",
+                                    'value': float(row['total_liabilities']),
+                                    'report_period': row.get('end_date'),
+                                    'period': period,
+                                    'currency': 'CNY'
+                                })
+            except Exception as e:
+                print(f"Error fetching total_debt for {ticker}: {e}")
+        
+        return results
+        
     except Exception as e:
         print(f"Error in search_line_items for {ticker}: {e}")
-    
-    return results
-
+        return []
+        
 # ==================== 辅助函数 ====================
 def prices_to_df(prices: List[Price]) -> pd.DataFrame:
     data = {

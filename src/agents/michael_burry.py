@@ -47,7 +47,12 @@ def michael_burry_agent(state: AgentState, agent_id: str = "michael_burry_agent"
         # Fetch raw data
         # ------------------------------------------------------------------
         progress.update_status(agent_id, ticker, "Fetching financial metrics")
-        metrics = get_financial_metrics(ticker, end_date, period="ttm", limit=5, api_key=api_key)
+        metrics_raw = get_financial_metrics(ticker, end_date, period="annual", limit=5, api_key=api_key)
+        # 兼容列表返回：如果返回的是列表且非空，取第一个元素；否则保持原值
+        if isinstance(metrics_raw, list):
+           metrics = metrics_raw[0] if metrics_raw else None
+        else:
+           metrics = metrics_raw
 
         if not metrics or metrics.price_to_earnings_ratio is None:
            return {

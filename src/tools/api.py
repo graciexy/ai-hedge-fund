@@ -317,43 +317,44 @@ def get_income_statement(ticker: str, **kwargs) -> List[Dict]:
     return []
 
 # ==================== 搜索财务报表行项目 ====================
-def search_line_items(
-    ticker: str,
-    line_items: List[str],
-    *args,  # 吸收多余的位置参数（如 period, limit 被误传为位置参数时）
-    period: str = "ttm",
-    limit: int = 10,
-    end_date: str = None,
-    api_key: str = None,  # 兼容原项目的 api_key 参数
-    **kwargs
-) -> List[Dict]:
+def search_line_items(*args, **kwargs):
     """
     搜索特定财务报表项目 - A股Tushare适配版
-    
-    Args:
-        ticker: 股票代码
-        line_items: 财务项目列表
-        *args: 吸收多余位置参数（兼容旧调用方式）
-        period: 报告周期
-        limit: 返回记录数量
-        end_date: 结束日期
-        api_key: 兼容原API（Tushare不需要，但保留参数避免报错）
-        **kwargs: 其他参数
-    
-    Returns:
-        List[Dict]: 财务数据列表
+    兼容所有调用方式：位置参数、关键字参数、混合参数
     """
+    # 参数提取
+    ticker = None
+    line_items = None
+    period = "ttm"
+    limit = 10
+    end_date = None
+    api_key = None
+    
+    # 从位置参数提取
+    if len(args) >= 1:
+        ticker = args[0]
+    if len(args) >= 2:
+        line_items = args[1]
+    if len(args) >= 3:
+        period = args[2]
+    if len(args) >= 4:
+        limit = args[3]
+    
+    # 从关键字参数提取（覆盖位置参数）
+    ticker = kwargs.get('ticker', ticker)
+    line_items = kwargs.get('line_items', line_items)
+    period = kwargs.get('period', period)
+    limit = kwargs.get('limit', limit)
+    end_date = kwargs.get('end_date', end_date)
+    api_key = kwargs.get('api_key', api_key)
+    
+    if not ticker or not line_items:
+        return []
+    
     ticker = _normalize_ticker(ticker)
-    results = []
     
-    # 如果 args 中有值，尝试解析（兼容旧调用）
-    if len(args) >= 1 and isinstance(args[0], str):
-        period = args[0]
-    if len(args) >= 2 and isinstance(args[1], int):
-        limit = args[1]
-    
-    # Tushare 字段映射表
-    field_mapping = {
+    # 字段映射表
+    FIELD_MAP = {
         "revenue": "total_revenue",
         "operating_income": "operate_income",
         "net_income": "n_income",
@@ -366,77 +367,74 @@ def search_line_items(
         "operating_cash_flow": "n_cashflow_act",
     }
     
+    results = []
+    
     try:
-        # 获取利润表数据
-        income_fields = {k: v for k, v in field_mapping.items() 
-                        if k in ["revenue", "operating_income", "net_income"] and v}
+        # 查询利润表
+        income_fields = [(item, FIELD_MAP[item]) for item in line_items 
+                        if item in FIELD_MAP and FIELD_MAP[item] in 
+                        ["total_revenue", "operate_income", "n_income"]]
         
-        if any(item in income_fields for item in line_items):
-            df_income = pro.income(ts_code=ticker, limit=limit)
-            if not df_income.empty:
-                for item in line_items:
-                    field = income_fields.get(item)
-                    if field and field in df_income.columns:
-                        for _, row in df_income.iterrows():
-                            if pd.notna(row.get(field)):
+        if income_fields:
+            df = pro.income(ts_code=ticker, limit=limit)
+            if not df.empty:
+                for std_name, ts_name in income_fields:
+                    if ts_name in df.columns:
+                        for _, row in df.iterrows():
+                            if pd.notna(row[ts_name]):
                                 results.append({
                                     'ticker': ticker,
-                                    'line_item': item,
-                                    'value': float(row[field]),
-                                    'report_period': row.get('end_date'),
+                                    'line_item': std_name,
+                                    'value': float(row[ts_name]),
+                                    'report_period': str(row.get('end_date', '')),
                                     'period': period,
                                     'currency': 'CNY'
                                 })
         
-        # 获取资产负债表数据
-        balance_fields = {k: v for k, v in field_mapping.items() 
-                         if k in ["total_assets", "shareholders_equity", "cash_and_equivalents", 
-                                 "total_debt", "inventory", "accounts_receivable"] and v}
+        # 查询资产负债表
+        balance_fields = [(item, FIELD_MAP[item]) for item in line_items 
+                         if item in FIELD_MAP and FIELD_MAP[item] in 
+                         ["total_assets", "total_liabilities", "total_hldr_eqy_exc_min_int", 
+                          "money_cap", "inventories", "accounts_receiv"]]
         
-        if any(item in balance_fields for item in line_items):
-            df_balance = pro.balancesheet(ts_code=ticker, limit=limit)
-            if not df_balance.empty:
-                for item in line_items:
-                    field = balance_fields.get(item)
-                    if field and field in df_balance.columns:
-                        for _, row in df_balance.iterrows():
-                            if pd.notna(row.get(field)):
-                                # 避免重复
-                                exists = any(r for r in results 
-                                           if r['line_item'] == item 
-                                           and r['report_period'] == row.get('end_date'))
-                                if not exists:
+        if balance_fields:
+            df = pro.balancesheet(ts_code=ticker, limit=limit)
+            if not df.empty:
+                for std_name, ts_name in balance_fields:
+                    if ts_name in df.columns:
+                        for _, row in df.iterrows():
+                            if pd.notna(row[ts_name]):
+                                dup = any(r for r in results 
+                                         if r['line_item'] == std_name 
+                                         and r['report_period'] == str(row.get('end_date', '')))
+                                if not dup:
                                     results.append({
                                         'ticker': ticker,
-                                        'line_item': item,
-                                        'value': float(row[field]),
-                                        'report_period': row.get('end_date'),
+                                        'line_item': std_name,
+                                        'value': float(row[ts_name]),
+                                        'report_period': str(row.get('end_date', '')),
                                         'period': period,
                                         'currency': 'CNY'
                                     })
         
-        # 获取现金流量表数据
-        cashflow_items = [item for item in line_items if "cash" in item.lower()]
-        if cashflow_items:
-            df_cashflow = pro.cashflow(ts_code=ticker, limit=limit)
-            if not df_cashflow.empty:
-                for item in line_items:
-                    field = field_mapping.get(item)
-                    if field and field in df_cashflow.columns:
-                        for _, row in df_cashflow.iterrows():
-                            if pd.notna(row.get(field)):
-                                exists = any(r for r in results 
-                                           if r['line_item'] == item 
-                                           and r['report_period'] == row.get('end_date'))
-                                if not exists:
-                                    results.append({
-                                        'ticker': ticker,
-                                        'line_item': item,
-                                        'value': float(row[field]),
-                                        'report_period': row.get('end_date'),
-                                        'period': period,
-                                        'currency': 'CNY'
-                                    })
+        # 查询现金流量表
+        if "free_cash_flow" in line_items or any("cash" in item for item in line_items):
+            df = pro.cashflow(ts_code=ticker, limit=limit)
+            if not df.empty:
+                if "free_cash_flow" in line_items:
+                    for _, row in df.iterrows():
+                        ocf = row.get("n_cashflow_act")
+                        if pd.notna(ocf):
+                            capex = row.get("c_paid_for_assets")
+                            fcf = float(ocf) - (abs(float(capex)) if pd.notna(capex) else 0)
+                            results.append({
+                                'ticker': ticker,
+                                'line_item': "free_cash_flow",
+                                'value': fcf,
+                                'report_period': str(row.get('end_date', '')),
+                                'period': period,
+                                'currency': 'CNY'
+                            })
         
         return results
         

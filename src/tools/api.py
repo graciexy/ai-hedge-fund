@@ -345,8 +345,8 @@ def search_line_items(*args, **kwargs):
     line_items = kwargs.get('line_items', line_items)
     period = kwargs.get('period', period)
     limit = kwargs.get('limit', limit)
-    end_date = kwargs.get('end_date', end_date)
-    api_key = kwargs.get('api_key', api_key)
+    end_date = kwargs.get('end_date', None)
+    api_key = kwargs.get('api_key', None)
     
     if not ticker or not line_items:
         return []

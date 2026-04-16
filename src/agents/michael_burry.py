@@ -49,6 +49,13 @@ def michael_burry_agent(state: AgentState, agent_id: str = "michael_burry_agent"
         progress.update_status(agent_id, ticker, "Fetching financial metrics")
         metrics = get_financial_metrics(ticker, end_date, period="ttm", limit=5, api_key=api_key)
 
+        if not metrics or metrics.price_to_earnings_ratio is None:
+           return {
+               "signal": "neutral",
+               "confidence": 0,
+               "reasoning": f"Insufficient financial data for {ticker} (A股数据可能不完整)"
+           }
+            
         progress.update_status(agent_id, ticker, "Fetching line items")
         line_items = search_line_items(
             ticker,

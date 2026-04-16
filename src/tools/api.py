@@ -48,155 +48,111 @@ def get_prices(ticker: str, start_date: str, end_date: str, **kwargs) -> List[Pr
         return []
 
 # ==================== 财务指标 ====================
-def get_financial_metrics(ticker: str, end_date: str = None, **kwargs) -> FinancialMetrics:
+def get_financial_metrics(ticker: str, end_date: str = None, **kwargs) -> List[FinancialMetrics]:
     """
-    获取财务指标 - 适配 A 股 Tushare 数据
-    字段映射：Tushare 字段名 -> 模型标准字段名
+    获取财务指标，返回列表（原项目期望列表，用于多期分析）
     """
     ticker = _normalize_ticker(ticker)
-    
-    # 初始化所有字段为 None
-    metrics_data = {
-        # 基础字段
-        "ticker": ticker,
-        "report_period": None,
-        "period": kwargs.get('period', 'ttm'),
-        "currency": "CNY",
-        
-        # 估值指标
-        "market_cap": None,
-        "enterprise_value": None,
-        "price_to_earnings_ratio": None,      # pe_ratio
-        "price_to_book_ratio": None,            # pb_ratio
-        "price_to_sales_ratio": None,           # ps_ratio
-        "enterprise_value_to_ebitda_ratio": None,
-        "enterprise_value_to_revenue_ratio": None,
-        "free_cash_flow_yield": None,
-        "peg_ratio": None,
-        
-        # 盈利能力
-        "gross_margin": None,
-        "operating_margin": None,
-        "net_margin": None,
-        "return_on_equity": None,               # roe
-        "return_on_assets": None,               # roa
-        "return_on_invested_capital": None,
-        
-        # 运营效率
-        "asset_turnover": None,
-        "inventory_turnover": None,
-        "receivables_turnover": None,
-        "days_sales_outstanding": None,
-        "operating_cycle": None,
-        "working_capital_turnover": None,
-        
-        # 偿债能力
-        "current_ratio": None,
-        "quick_ratio": None,
-        "cash_ratio": None,
-        "operating_cash_flow_ratio": None,
-        "debt_to_equity": None,
-        "debt_to_assets": None,
-        "interest_coverage": None,
-        
-        # 成长性
-        "revenue_growth": None,
-        "earnings_growth": None,
-        "book_value_growth": None,
-        "earnings_per_share_growth": None,
-        "free_cash_flow_growth": None,
-        "operating_income_growth": None,
-        "ebitda_growth": None,
-        
-        # 股东回报
-        "payout_ratio": None,
-        
-        # 每股指标
-        "earnings_per_share": None,             # eps
-        "book_value_per_share": None,           # bps
-        "free_cash_flow_per_share": None,
+    # 准备一个包含所有字段的默认字典
+    default_metrics_dict = {
+        'ticker': ticker,
+        'report_period': '',
+        'period': kwargs.get('period', 'annual'),
+        'currency': 'CNY',
+        'market_cap': None,
+        'enterprise_value': None,
+        'price_to_earnings_ratio': None,
+        'price_to_book_ratio': None,
+        'price_to_sales_ratio': None,
+        'enterprise_value_to_ebitda_ratio': None,
+        'enterprise_value_to_revenue_ratio': None,
+        'free_cash_flow_yield': None,
+        'peg_ratio': None,
+        'gross_margin': None,
+        'operating_margin': None,
+        'net_margin': None,
+        'return_on_equity': None,
+        'return_on_assets': None,
+        'return_on_invested_capital': None,
+        'asset_turnover': None,
+        'inventory_turnover': None,
+        'receivables_turnover': None,
+        'days_sales_outstanding': None,
+        'operating_cycle': None,
+        'working_capital_turnover': None,
+        'current_ratio': None,
+        'quick_ratio': None,
+        'cash_ratio': None,
+        'operating_cash_flow_ratio': None,
+        'debt_to_equity': None,
+        'debt_to_assets': None,
+        'interest_coverage': None,
+        'revenue_growth': None,
+        'earnings_growth': None,
+        'book_value_growth': None,
+        'earnings_per_share_growth': None,
+        'free_cash_flow_growth': None,
+        'operating_income_growth': None,
+        'ebitda_growth': None,
+        'payout_ratio': None,
+        'earnings_per_share': None,
+        'book_value_per_share': None,
+        'free_cash_flow_per_share': None,
     }
-    
     try:
-        # 1. 获取基础财务指标 (fina_indicator)
+        # 获取基础财务指标
         df_indicator = pro.fina_indicator(ts_code=ticker)
         if not df_indicator.empty:
             latest = df_indicator.iloc[0]
-            
-            # 字段映射：Tushare -> 标准字段
-            field_mapping = {
-                # 盈利能力
-                'roe': 'return_on_equity',
-                'roa': 'return_on_assets',
-                'gross_margin': 'gross_margin',
-                'operating_margin': 'operating_margin',
-                'net_margin': 'net_margin',
-                'asset_turnover': 'asset_turnover',
-                'inventory_turnover': 'inventory_turnover',
-                'receivables_turnover': 'receivables_turnover',
-                'operating_cycle': 'operating_cycle',
-                'working_capital_turnover': 'working_capital_turnover',
-                'current_ratio': 'current_ratio',
-                'quick_ratio': 'quick_ratio',
-                'debt_to_equity': 'debt_to_equity',
-                'interest_coverage': 'interest_coverage',
-                'revenue_growth': 'revenue_growth',
-                'operating_income_growth': 'operating_income_growth',
-                'eps': 'earnings_per_share',
-                'bps': 'book_value_per_share',
-            }
-            
-            for tushare_field, standard_field in field_mapping.items():
-                if tushare_field in latest and pd.notna(latest[tushare_field]):
-                    metrics_data[standard_field] = float(latest[tushare_field])
-            
-            metrics_data['report_period'] = latest.get('end_date')
-        
-        # 2. 获取每日基本面数据 (daily_basic) - 包含估值指标
+            default_metrics_dict.update({
+                'report_period': latest.get('end_date', ''),
+                'price_to_earnings_ratio': latest.get('pe'),
+                'price_to_book_ratio': latest.get('pb'),
+                'price_to_sales_ratio': latest.get('ps'),
+                'gross_margin': latest.get('gross_margin'),
+                'operating_margin': latest.get('operating_margin'),
+                'net_margin': latest.get('net_margin'),
+                'return_on_equity': latest.get('roe'),
+                'return_on_assets': latest.get('roa'),
+                'asset_turnover': latest.get('asset_turnover'),
+                'inventory_turnover': latest.get('inventory_turnover'),
+                'receivables_turnover': latest.get('receivables_turnover'),
+                'operating_cycle': latest.get('operating_cycle'),
+                'working_capital_turnover': latest.get('working_capital_turnover'),
+                'current_ratio': latest.get('current_ratio'),
+                'quick_ratio': latest.get('quick_ratio'),
+                'debt_to_equity': latest.get('debt_to_equity'),
+                'interest_coverage': latest.get('interest_coverage'),
+                'revenue_growth': latest.get('revenue_growth'),
+                'earnings_growth': latest.get('earnings_growth'),
+                'operating_income_growth': latest.get('operating_income_growth'),
+                'earnings_per_share': latest.get('eps'),
+                'book_value_per_share': latest.get('bps'),
+            })
+        # 获取每日基本面
         df_daily = pro.daily_basic(ts_code=ticker)
         if not df_daily.empty:
             latest_daily = df_daily.iloc[0]
-            
-            # 估值指标映射
-            valuation_mapping = {
-                'pe': 'price_to_earnings_ratio',
-                'pb': 'price_to_book_ratio',
-                'ps': 'price_to_sales_ratio',
-                'total_mv': 'market_cap',  # 万元
-            }
-            
-            for tushare_field, standard_field in valuation_mapping.items():
-                if tushare_field in latest_daily and pd.notna(latest_daily[tushare_field]):
-                    value = float(latest_daily[tushare_field])
-                    # 市值需要转换单位（万元 -> 元）
-                    if tushare_field == 'total_mv':
-                        value *= 10000
-                    metrics_data[standard_field] = value
-        
-        # 3. 尝试计算 Enterprise Value (简版)
-        if metrics_data['market_cap']:
-            try:
-                # 获取最新资产负债表
-                df_balance = pro.balancesheet(ts_code=ticker, period=metrics_data['report_period'][:4]+'1231' if metrics_data['report_period'] else None)
-                if not df_balance.empty:
-                    latest_balance = df_balance.iloc[0]
-                    total_debt = 0
-                    cash = 0
-                    if 'total_liabilities' in latest_balance and pd.notna(latest_balance['total_liabilities']):
-                        total_debt = float(latest_balance['total_liabilities'])
-                    if 'money_cap' in latest_balance and pd.notna(latest_balance['money_cap']):
-                        cash = float(latest_balance['money_cap'])
-                    
-                    metrics_data['enterprise_value'] = metrics_data['market_cap'] + total_debt - cash
-            except Exception:
-                pass
-        
-        return FinancialMetrics(**metrics_data)
-        
+            if default_metrics_dict['market_cap'] is None:
+                default_metrics_dict['market_cap'] = latest_daily.get('total_mv') * 10000 if latest_daily.get('total_mv') else None
+            if default_metrics_dict['price_to_earnings_ratio'] is None:
+                default_metrics_dict['price_to_earnings_ratio'] = latest_daily.get('pe')
+            if default_metrics_dict['price_to_book_ratio'] is None:
+                default_metrics_dict['price_to_book_ratio'] = latest_daily.get('pb')
+            if default_metrics_dict['price_to_sales_ratio'] is None:
+                default_metrics_dict['price_to_sales_ratio'] = latest_daily.get('ps')
     except Exception as e:
         print(f"Error in get_financial_metrics for {ticker}: {e}")
-        # 返回带有默认 None 值的对象，而不是抛出异常
-        return FinancialMetrics(**metrics_data)
+    # 确保 report_period 不为 None
+    if default_metrics_dict['report_period'] is None:
+        default_metrics_dict['report_period'] = ''
+    # 确保 period 不为 None
+    if default_metrics_dict['period'] is None:
+        default_metrics_dict['period'] = 'annual'
+    # 创建 FinancialMetrics 对象
+    metrics_obj = FinancialMetrics(**default_metrics_dict)
+    # 返回列表（只有一个元素）
+    return [metrics_obj]
 
 # ==================== 公司新闻 ====================
 def get_company_news(ticker: str, start_date: str = None, end_date: str = None, **kwargs) -> List[CompanyNews]:

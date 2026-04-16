@@ -1,6 +1,9 @@
 import os
 import json
-from langchain_anthropic import ChatAnthropic
+try:
+    from langchain_anthropic import ChatAnthropic
+except ImportError:
+    ChatAnthropic = None
 from langchain_deepseek import ChatDeepSeek
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_groq import ChatGroq
@@ -151,12 +154,17 @@ def get_model(model_name: str, model_provider: ModelProvider, api_keys: dict = N
             print(f"API Key Error: Please make sure OPENAI_API_KEY is set in your .env file or provided via API keys.")
             raise ValueError("OpenAI API key not found.  Please make sure OPENAI_API_KEY is set in your .env file or provided via API keys.")
         return ChatOpenAI(model=model_name, api_key=api_key, base_url=base_url)
+        
     elif model_provider == ModelProvider.ANTHROPIC:
-        api_key = (api_keys or {}).get("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_API_KEY")
-        if not api_key:
-            print(f"API Key Error: Please make sure ANTHROPIC_API_KEY is set in your .env file or provided via API keys.")
-            raise ValueError("Anthropic API key not found.  Please make sure ANTHROPIC_API_KEY is set in your .env file or provided via API keys.")
-        return ChatAnthropic(model=model_name, api_key=api_key)
+        try:
+            from langchain_anthropic import ChatAnthropic
+        except ImportError:
+            raise ImportError(
+                "Please install langchain-anthropic to use Claude models: "
+                "pip install langchain-anthropic"
+            )
+        return ChatAnthropic(model=model_name, api_key=os.getenv("ANTHROPIC_API_KEY"))
+        
     elif model_provider == ModelProvider.DEEPSEEK:
         api_key = (api_keys or {}).get("DEEPSEEK_API_KEY") or os.getenv("DEEPSEEK_API_KEY")
         if not api_key:

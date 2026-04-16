@@ -1,95 +1,34 @@
 name: Run A-Share Analysis
 
 on:
-  workflow_dispatch:  # 手动触发
+  workflow_dispatch:
   schedule:
-    - cron: '0 1 * * *'  # 每天凌晨1点运行（可选）
+    - cron: '0 1 * * *'
 
 jobs:
   analyze:
     runs-on: ubuntu-latest
-    
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.11'
-        
-    - name: Clean Python cache
-      run: |
-        echo "Cleaning Python cache..."
-        find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
-        find . -name "*.pyc" -delete 2>/dev/null || true
-        find . -name "*.pyo" -delete 2>/dev/null || true
-        echo "Cache cleaned"
         
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        # 一次性安装所有依赖（核心依赖 + 从 Poetry 日志提取的依赖）
-        pip install --no-cache-dir \
-          tushare \
-          pandas \
-          numpy \
-          pydantic \
-          python-dotenv \
-          langgraph \
-          langchain \
-          langchain-core \
-          langchain-openai \
-          colorama \
-          questionary \
-          rich \
-          requests \
-          openai \
-          tiktoken \
-          shellingham \
-          watchfiles \
-          attrs \
-          wcwidth \
-          websockets \
-          yarl \
-          six \
-          python-dateutil \
-          typing-extensions \
-          charset-normalizer \
-          idna \
-          urllib3 \
-          certifi \
-          packaging \
-          annotated-types \
-          pydantic-core \
-          anyio \
-          sniffio \
-          httpx \
-          httpcore \
-          h11 \
-          jsonpatch \
-          jsonpointer \
-          pyyaml \
-          tqdm \
-          tenacity \
-          distro \
-          jiter \
-          ormsgpack
-        
-    - name: Verify installations
-      run: |
-        echo "Checking key packages:"
-        pip list | grep -E "(tushare|langgraph|langchain|rich|colorama|questionary|openai)"
-        
-    - name: Verify api.py changes
-      run: |
-        echo "Checking search_line_items function signature:"
-        grep -A 2 "def search_line_items" src/tools/api.py || echo "Function not found!"
+        pip install -e .
+        pip install tushare
+        pip install langchain-deepseek langchain-anthropic langchain-google-genai
         
     - name: Run A-Share Analysis
       env:
         TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
         OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        OPENAI_API_BASE: ${{ vars.OPENAI_API_BASE }}
         PYTHONPATH: ${{ github.workspace }}
       run: |
         python -B src/main.py --tickers "605090.SH 513130.SH 002539.SZ" --analysts-all --model "gpt-4.1"

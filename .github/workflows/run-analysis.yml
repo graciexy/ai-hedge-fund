@@ -29,13 +29,13 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        # 安装所有关键依赖
-        pip install --no-cache-dir tushare pandas pydantic python-dotenv langgraph langchain-openai colorama requests numpy questionary
+        # 一次性安装所有可能需要的依赖
+        pip install --no-cache-dir tushare pandas pydantic python-dotenv langgraph langchain-openai colorama requests numpy questionary langchain langchain-core openai
         
     - name: Verify installations
       run: |
         echo "Checking installed packages:"
-        pip list | grep -E "(tushare|pandas|pydantic|langgraph|langchain|colorama|questionary)"
+        pip list | grep -E "(tushare|pandas|pydantic|langgraph|langchain|colorama|questionary|openai)"
         
     - name: Verify api.py changes
       run: |
@@ -46,5 +46,6 @@ jobs:
       env:
         TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
         OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        PYTHONPATH: ${{ github.workspace }}  # 关键：设置 PYTHONPATH，让 Python 能找到 src 模块
       run: |
         python -B src/main.py --tickers "605090.SH 513130.SH 002539.SZ" --analysts-all --model "gpt-4.1"

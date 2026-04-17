@@ -53,6 +53,9 @@ def michael_burry_agent(state: AgentState, agent_id: str = "michael_burry_agent"
            metrics = metrics_raw[0] if metrics_raw else None
         else:
            metrics = metrics_raw
+         # 调试输出（运行后可在日志中查看）
+        print(f"[DEBUG] metrics type = {type(metrics)}", flush=True)
+        
 
         if not metrics or metrics.price_to_earnings_ratio is None:
            return {

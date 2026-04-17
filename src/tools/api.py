@@ -316,34 +316,183 @@ def get_income_statement(ticker: str, **kwargs) -> List[Dict]:
         return []
 
 # ==================== 搜索财务报表行项目（返回真实对象列表） ====================
-def search_line_items(*args, **kwargs) -> List[Any]:
+def search_line_items(*args, **kwargs):
     """
-    返回一个包含真实财务行项目数据的对象列表，每个对象具有 earnings_per_share, revenue 等属性。
-    这里简化：从利润表获取最近一期数据。
+    搜索特定财务报表项目 - A股Tushare适配版
+    返回 SimpleNamespace 对象列表，兼容原代码访问方式
     """
-    ticker = kwargs.get('ticker') or (args[0] if args else None)
-    if not ticker:
+    from types import SimpleNamespace
+    
+    # 参数提取
+    ticker = None
+    line_items = None
+    period = "ttm"
+    limit = 10
+    end_date = None
+    api_key = None
+    
+    if len(args) >= 1:
+        ticker = args[0]
+    if len(args) >= 2:
+        line_items = args[1]
+    if len(args) >= 3:
+        period = args[2]
+    if len(args) >= 4:
+        limit = args[3]
+    
+    ticker = kwargs.pop('ticker', ticker)
+    line_items = kwargs.pop('line_items', line_items)
+    period = kwargs.pop('period', period)
+    limit = kwargs.pop('limit', limit)
+    end_date = kwargs.pop('end_date', end_date)
+    api_key = kwargs.pop('api_key', api_key)
+    
+    if not ticker or not line_items:
         return []
+    
     ticker = _normalize_ticker(ticker)
+    
+    # 存储每个报告期的数据
+    period_data = {}
+    
     try:
-        df = pro.income(ts_code=ticker)
-        if df.empty:
-            return []
-        row = df.iloc[0]
-        # 使用 SimpleNamespace 创建具有属性的对象
-        item = SimpleNamespace(
-            earnings_per_share=row.get('basic_eps'),
-            revenue=row.get('revenue'),
-            net_income=row.get('n_income'),
-            ebitda=None,   # 可从 cashflow 计算，暂略
-            free_cash_flow=None,
-            operating_cash_flow=None,
-            total_assets=None,
-            total_liabilities=None,
-        )
-        return [item]
-    except Exception:
-        # 失败时返回空列表，避免崩溃
+        # 查询利润表
+        income_fields = ["revenue", "operating_income", "net_income", "total_profit"]
+        if any(item in income_fields for item in line_items):
+            try:
+                df = pro.income(ts_code=ticker, limit=limit)
+                if not df.empty:
+                    for _, row in df.iterrows():
+                        end_date = str(row.get('end_date', ''))
+                        if end_date not in period_data:
+                            period_data[end_date] = {
+                                'ticker': ticker,
+                                'report_period': end_date,
+                                'period': period,
+                                'currency': 'CNY'
+                            }
+                        
+                        if 'total_revenue' in df.columns and pd.notna(row.get('total_revenue')):
+                            period_data[end_date]['revenue'] = float(row['total_revenue'])
+                        if 'operate_income' in df.columns and pd.notna(row.get('operate_income')):
+                            period_data[end_date]['operating_income'] = float(row['operate_income'])
+                            # 计算经营利润率
+                            if 'total_revenue' in df.columns and pd.notna(row.get('total_revenue')) and row['total_revenue'] != 0:
+                                period_data[end_date]['operating_margin'] = float(row['operate_income']) / float(row['total_revenue'])
+                        if 'n_income' in df.columns and pd.notna(row.get('n_income')):
+                            period_data[end_date]['net_income'] = float(row['n_income'])
+                            # 计算净利润率
+                            if 'total_revenue' in df.columns and pd.notna(row.get('total_revenue')) and row['total_revenue'] != 0:
+                                period_data[end_date]['net_margin'] = float(row['n_income']) / float(row['total_revenue'])
+            except Exception as e:
+                print(f"Income query error for {ticker}: {e}")
+        
+        # 查询资产负债表
+        balance_fields = ["total_assets", "total_liabilities", "shareholders_equity", 
+                         "cash_and_equivalents", "total_debt", "inventory", "accounts_receivable"]
+        if any(item in balance_fields for item in line_items):
+            try:
+                df = pro.balancesheet(ts_code=ticker, limit=limit)
+                if not df.empty:
+                    for _, row in df.iterrows():
+                        end_date = str(row.get('end_date', ''))
+                        if end_date not in period_data:
+                            period_data[end_date] = {
+                                'ticker': ticker,
+                                'report_period': end_date,
+                                'period': period,
+                                'currency': 'CNY'
+                            }
+                        
+                        if 'total_assets' in df.columns and pd.notna(row.get('total_assets')):
+                            period_data[end_date]['total_assets'] = float(row['total_assets'])
+                        if 'total_liabilities' in df.columns and pd.notna(row.get('total_liabilities')):
+                            period_data[end_date]['total_liabilities'] = float(row['total_liabilities'])
+                            period_data[end_date]['total_debt'] = float(row['total_liabilities'])
+                        if 'total_hldr_eqy_exc_min_int' in df.columns and pd.notna(row.get('total_hldr_eqy_exc_min_int')):
+                            period_data[end_date]['shareholders_equity'] = float(row['total_hldr_eqy_exc_min_int'])
+                            # 计算 ROE 和负债权益比
+                            if 'n_income' in locals() and pd.notna(row.get('total_hldr_eqy_exc_min_int')) and row['total_hldr_eqy_exc_min_int'] != 0:
+                                # 需要从利润表获取净利润，这里先占位
+                                pass
+                            if 'total_liabilities' in df.columns and pd.notna(row.get('total_liabilities')) and row['total_hldr_eqy_exc_min_int'] != 0:
+                                period_data[end_date]['debt_to_equity'] = float(row['total_liabilities']) / float(row['total_hldr_eqy_exc_min_int'])
+                        if 'money_cap' in df.columns and pd.notna(row.get('money_cap')):
+                            period_data[end_date]['cash_and_equivalents'] = float(row['money_cap'])
+                        if 'inventories' in df.columns and pd.notna(row.get('inventories')):
+                            period_data[end_date]['inventory'] = float(row['inventories'])
+                        if 'accounts_receiv' in df.columns and pd.notna(row.get('accounts_receiv')):
+                            period_data[end_date]['accounts_receivable'] = float(row['accounts_receiv'])
+            except Exception as e:
+                print(f"Balance query error for {ticker}: {e}")
+        
+        # 查询现金流量表
+        if any("cash" in item or item == "free_cash_flow" for item in line_items):
+            try:
+                df = pro.cashflow(ts_code=ticker, limit=limit)
+                if not df.empty:
+                    for _, row in df.iterrows():
+                        end_date = str(row.get('end_date', ''))
+                        if end_date not in period_data:
+                            period_data[end_date] = {
+                                'ticker': ticker,
+                                'report_period': end_date,
+                                'period': period,
+                                'currency': 'CNY'
+                            }
+                        
+                        if 'n_cashflow_act' in df.columns and pd.notna(row.get('n_cashflow_act')):
+                            period_data[end_date]['operating_cash_flow'] = float(row['n_cashflow_act'])
+                        
+                        if "free_cash_flow" in line_items:
+                            ocf = row.get("n_cashflow_act")
+                            capex = row.get("c_paid_for_assets")
+                            if pd.notna(ocf):
+                                fcf = float(ocf) - (abs(float(capex)) if pd.notna(capex) else 0)
+                                period_data[end_date]['free_cash_flow'] = fcf
+            except Exception as e:
+                print(f"Cashflow query error for {ticker}: {e}")
+        
+        # 获取财务指标（fina_indicator）中的增长率数据
+        try:
+            df_indicator = pro.fina_indicator(ts_code=ticker, limit=limit)
+            if not df.empty:
+                for _, row in df_indicator.iterrows():
+                    end_date = str(row.get('end_date', ''))
+                    if end_date in period_data:
+                        if 'revenue_yoy' in df_indicator.columns and pd.notna(row.get('revenue_yoy')):
+                            period_data[end_date]['revenue_growth'] = float(row['revenue_yoy'])
+                        if 'profit_yoy' in df_indicator.columns and pd.notna(row.get('profit_yoy')):
+                            period_data[end_date]['earnings_growth'] = float(row['profit_yoy'])
+                        if 'roe' in df_indicator.columns and pd.notna(row.get('roe')):
+                            period_data[end_date]['return_on_equity'] = float(row['roe'])
+        except Exception as e:
+            print(f"Indicator query error for {ticker}: {e}")
+        
+        # 转换为 SimpleNamespace 对象列表
+        results = []
+        for end_date, data in period_data.items():
+            # 确保所有请求的 line_items 都存在（缺失的设为 None）
+            for item in line_items:
+                if item not in data:
+                    data[item] = None
+            
+            # 确保常用的财务指标属性存在（代码可能访问）
+            default_fields = [
+                'operating_margin', 'revenue_growth', 'earnings_growth', 
+                'return_on_equity', 'debt_to_equity', 'gross_margin', 
+                'net_margin', 'free_cash_flow'
+            ]
+            for field in default_fields:
+                if field not in data:
+                    data[field] = None
+            
+            results.append(SimpleNamespace(**data))
+        
+        return results
+        
+    except Exception as e:
+        print(f"Error in search_line_items for {ticker}: {e}")
         return []
 
 # ==================== 辅助函数 ====================

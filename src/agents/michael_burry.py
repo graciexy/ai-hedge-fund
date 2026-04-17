@@ -23,7 +23,6 @@ from src.utils.api_key import get_api_key_from_state
 
 class MichaelBurrySignal(BaseModel):
     """Schema returned by the LLM."""
-
     signal: Literal["bullish", "bearish", "neutral"]
     confidence: float  # 0–100
     reasoning: str
@@ -33,37 +32,35 @@ def michael_burry_agent(state: AgentState, agent_id: str = "michael_burry_agent"
     """Analyse stocks using Michael Burry's deep‑value, contrarian framework."""
     api_key = get_api_key_from_state(state, "FINANCIAL_DATASETS_API_KEY")
     data = state["data"]
-    end_date: str = data["end_date"]  # YYYY‑MM‑DD
+    end_date: str = data["end_date"]
     tickers: list[str] = data["tickers"]
 
-    # We look one year back for insider trades / news flow
     start_date = (datetime.fromisoformat(end_date) - timedelta(days=365)).date().isoformat()
 
     analysis_data: dict[str, dict] = {}
     burry_analysis: dict[str, dict] = {}
 
     for ticker in tickers:
-        # ------------------------------------------------------------------
-        # Fetch raw data
-        # ------------------------------------------------------------------
         progress.update_status(agent_id, ticker, "Fetching financial metrics")
         metrics_raw = get_financial_metrics(ticker, end_date, period="annual", limit=5, api_key=api_key)
-        # 兼容列表返回：如果返回的是列表且非空，取第一个元素；否则保持原值
-        if isinstance(metrics_raw, list):
-           metrics = metrics_raw[0] if metrics_raw else None
-        else:
-           metrics = metrics_raw
-         # 调试输出（运行后可在日志中查看）
-        print(f"[DEBUG] metrics type = {type(metrics)}", flush=True)
         
+        # ✅ 关键修复：如果是列表且非空，取第一个元素；否则保持原值
+        if isinstance(metrics_raw, list):
+            metrics = metrics_raw[0] if metrics_raw else None
+        else:
+            metrics = metrics_raw
+
+        # 调试输出（运行后在日志中搜索）
+        print(f"[DEBUG] metrics type = {type(metrics)}", flush=True)
 
         if not metrics or metrics.price_to_earnings_ratio is None:
-           return {
-               "signal": "neutral",
-               "confidence": 0,
-               "reasoning": f"Insufficient financial data for {ticker} (A股数据可能不完整)"
-           }
-            
+            burry_analysis[ticker] = {
+                "signal": "neutral",
+                "confidence": 0,
+                "reasoning": f"Insufficient financial data for {ticker} (A股数据可能不完整)"
+            }
+            continue
+
         progress.update_status(agent_id, ticker, "Fetching line items")
         line_items = search_line_items(
             ticker,
@@ -90,9 +87,7 @@ def michael_burry_agent(state: AgentState, agent_id: str = "michael_burry_agent"
         progress.update_status(agent_id, ticker, "Fetching market cap")
         market_cap = get_market_cap(ticker, end_date, api_key=api_key)
 
-        # ------------------------------------------------------------------
-        # Run sub‑analyses
-        # ------------------------------------------------------------------
+        # 子分析（传入单个对象 metrics，而不是列表）
         progress.update_status(agent_id, ticker, "Analyzing value")
         value_analysis = _analyze_value(metrics, line_items, market_cap)
 
@@ -105,9 +100,6 @@ def michael_burry_agent(state: AgentState, agent_id: str = "michael_burry_agent"
         progress.update_status(agent_id, ticker, "Analyzing contrarian sentiment")
         contrarian_analysis = _analyze_contrarian_sentiment(news)
 
-        # ------------------------------------------------------------------
-        # Aggregate score & derive preliminary signal
-        # ------------------------------------------------------------------
         total_score = (
             value_analysis["score"]
             + balance_sheet_analysis["score"]
@@ -128,9 +120,6 @@ def michael_burry_agent(state: AgentState, agent_id: str = "michael_burry_agent"
         else:
             signal = "neutral"
 
-        # ------------------------------------------------------------------
-        # Collect data for LLM reasoning & output
-        # ------------------------------------------------------------------
         analysis_data[ticker] = {
             "signal": signal,
             "score": total_score,
@@ -158,9 +147,6 @@ def michael_burry_agent(state: AgentState, agent_id: str = "michael_burry_agent"
 
         progress.update_status(agent_id, ticker, "Done", analysis=burry_output.reasoning)
 
-    # ----------------------------------------------------------------------
-    # Return to the graph
-    # ----------------------------------------------------------------------
     message = HumanMessage(content=json.dumps(burry_analysis), name=agent_id)
 
     if state["metadata"].get("show_reasoning"):
@@ -174,25 +160,24 @@ def michael_burry_agent(state: AgentState, agent_id: str = "michael_burry_agent"
 
 
 ###############################################################################
-# Sub‑analysis helpers
+# Sub‑analysis helpers (已修复列表访问问题)
 ###############################################################################
-
 
 def _latest_line_item(line_items: list):
     """Return the most recent line‑item object or *None*."""
     return line_items[0] if line_items else None
 
 
-# ----- Value ----------------------------------------------------------------
-
 def _analyze_value(metrics, line_items, market_cap):
     """Free cash‑flow yield, EV/EBIT, other classic deep‑value metrics."""
-
-    max_score = 6  # 4 pts for FCF‑yield, 2 pts for EV/EBIT
+    max_score = 6
     score = 0
     details: list[str] = []
 
-    # Free‑cash‑flow yield
+    # ✅ 兼容：如果传入的是列表，取第一个元素
+    if isinstance(metrics, list):
+        metrics = metrics[0] if metrics else None
+
     latest_item = _latest_line_item(line_items)
     fcf = getattr(latest_item, "free_cash_flow", None) if latest_item else None
     if fcf is not None and market_cap:
@@ -211,9 +196,9 @@ def _analyze_value(metrics, line_items, market_cap):
     else:
         details.append("FCF data unavailable")
 
-    # EV/EBIT (from financial metrics)
+    # ✅ 修正：使用正确的属性名 enterprise_value_to_ebitda_ratio
     if metrics:
-        ev_ebit = getattr(metrics[0], "ev_to_ebit", None)
+        ev_ebit = getattr(metrics, "enterprise_value_to_ebitda_ratio", None)
         if ev_ebit is not None:
             if ev_ebit < 6:
                 score += 2
@@ -231,32 +216,34 @@ def _analyze_value(metrics, line_items, market_cap):
     return {"score": score, "max_score": max_score, "details": "; ".join(details)}
 
 
-# ----- Balance sheet --------------------------------------------------------
-
 def _analyze_balance_sheet(metrics, line_items):
     """Leverage and liquidity checks."""
-
     max_score = 3
     score = 0
     details: list[str] = []
 
-    latest_metrics = metrics[0] if metrics else None
+    # ✅ 兼容：如果传入的是列表，取第一个元素
+    if isinstance(metrics, list):
+        metrics = metrics[0] if metrics else None
+
     latest_item = _latest_line_item(line_items)
 
-    debt_to_equity = getattr(latest_metrics, "debt_to_equity", None) if latest_metrics else None
-    if debt_to_equity is not None:
-        if debt_to_equity < 0.5:
-            score += 2
-            details.append(f"Low D/E {debt_to_equity:.2f}")
-        elif debt_to_equity < 1:
-            score += 1
-            details.append(f"Moderate D/E {debt_to_equity:.2f}")
+    if metrics:
+        debt_to_equity = getattr(metrics, "debt_to_equity", None)
+        if debt_to_equity is not None:
+            if debt_to_equity < 0.5:
+                score += 2
+                details.append(f"Low D/E {debt_to_equity:.2f}")
+            elif debt_to_equity < 1:
+                score += 1
+                details.append(f"Moderate D/E {debt_to_equity:.2f}")
+            else:
+                details.append(f"High leverage D/E {debt_to_equity:.2f}")
         else:
-            details.append(f"High leverage D/E {debt_to_equity:.2f}")
+            details.append("Debt‑to‑equity data unavailable")
     else:
-        details.append("Debt‑to‑equity data unavailable")
+        details.append("Financial metrics unavailable")
 
-    # Quick liquidity sanity check (cash vs total debt)
     if latest_item is not None:
         cash = getattr(latest_item, "cash_and_equivalents", None)
         total_debt = getattr(latest_item, "total_debt", None)
@@ -272,11 +259,8 @@ def _analyze_balance_sheet(metrics, line_items):
     return {"score": score, "max_score": max_score, "details": "; ".join(details)}
 
 
-# ----- Insider activity -----------------------------------------------------
-
 def _analyze_insider_activity(insider_trades):
     """Net insider buying over the last 12 months acts as a hard catalyst."""
-
     max_score = 2
     score = 0
     details: list[str] = []
@@ -297,11 +281,8 @@ def _analyze_insider_activity(insider_trades):
     return {"score": score, "max_score": max_score, "details": "; ".join(details)}
 
 
-# ----- Contrarian sentiment -------------------------------------------------
-
 def _analyze_contrarian_sentiment(news):
     """Very rough gauge: a wall of recent negative headlines can be a *positive* for a contrarian."""
-
     max_score = 1
     score = 0
     details: list[str] = []
@@ -310,13 +291,12 @@ def _analyze_contrarian_sentiment(news):
         details.append("No recent news")
         return {"score": score, "max_score": max_score, "details": "; ".join(details)}
 
-    # Count negative sentiment articles
     sentiment_negative_count = sum(
         1 for n in news if n.sentiment and n.sentiment.lower() in ["negative", "bearish"]
     )
     
     if sentiment_negative_count >= 5:
-        score += 1  # The more hated, the better (assuming fundamentals hold up)
+        score += 1
         details.append(f"{sentiment_negative_count} negative headlines (contrarian opportunity)")
     else:
         details.append("Limited negative press")
@@ -378,7 +358,6 @@ def _generate_burry_output(
 
     prompt = template.invoke({"analysis_data": json.dumps(analysis_data, indent=2), "ticker": ticker})
 
-    # Default fallback signal in case parsing fails
     def create_default_michael_burry_signal():
         return MichaelBurrySignal(signal="neutral", confidence=0.0, reasoning="Parsing error – defaulting to neutral")
 
